@@ -63,3 +63,22 @@ Public domains: `controlplane` on port 8080 (the read-only listener) and
 Nodes are registered by chaos with `bmc=http://bmcsim.railway.internal:8443`
 (`CHAOS_NODE_BMC_URL` defaults to `CHAOS_BMCSIM_URL`). Listeners use `[::]` or
 `:port` because Railway's private network may be IPv6-only.
+
+## Watch paths and health checks
+
+Each service redeploys only when its own sources change, so docs and project
+page commits do not restart anything:
+
+| Service | Watch paths | Health check |
+|---|---|---|
+| `controlplane` | `/controlplane/**`, `/deploy/attestation/**` | `/healthz` |
+| `bmcsim` | `/controlplane/**`, `/deploy/attestation/**` | |
+| `chaos` | `/controlplane/**` | |
+| `agent-node-001`, `agent-node-002` | `/agent/**` | |
+| `prometheus` | `/deploy/railway/**`, `/deploy/prometheus/**` | |
+| `alertmanager` | `/deploy/railway/**` | |
+| `grafana` | `/deploy/railway/**`, `/deploy/grafana/**` | `/api/health` |
+
+The two public services have health checks so Railway keeps routing to the
+old container until the new one answers, which makes their deploys
+zero-downtime.
