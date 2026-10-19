@@ -14,7 +14,7 @@ import (
 )
 
 // defaultReferencePath assumes the control plane runs from controlplane/, as
-// the README's develop commands do.
+// the commands in docs/development.md do.
 const defaultReferencePath = "../deploy/attestation/reference.json"
 
 // newAttestation builds the attestation service. ATTEST_SIGNING_KEY (base64

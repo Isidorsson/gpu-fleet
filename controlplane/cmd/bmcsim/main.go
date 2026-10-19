@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gpu-fleet/controlplane/internal/bmcsim"
+	"gpu-fleet/controlplane/internal/logging"
 )
 
 const (
@@ -46,7 +47,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log := slog.Default()
+	log := logging.Setup()
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           handler,

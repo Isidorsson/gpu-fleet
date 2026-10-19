@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"gpu-fleet/controlplane/internal/chaos"
+	"gpu-fleet/controlplane/internal/logging"
 )
 
 func main() {
@@ -26,7 +27,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log := slog.Default()
+	log := logging.Setup()
 	log.Info("chaos starting",
 		"controlplane", cfg.ControlPlaneURL, "bmcsim", cfg.BMCSimURL, "node_bmc", cfg.NodeBMCURL,
 		"agents", len(cfg.Agents), "seed", cfg.Seed, "tick", cfg.Tick)

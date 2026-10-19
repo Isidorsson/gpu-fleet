@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gpu-fleet/controlplane/internal/api"
+	"gpu-fleet/controlplane/internal/logging"
 	"gpu-fleet/controlplane/internal/metrics"
 	"gpu-fleet/controlplane/internal/placement"
 	"gpu-fleet/controlplane/internal/store"
@@ -54,7 +55,7 @@ func run() error {
 		return err
 	}
 
-	log := slog.Default()
+	log := logging.Setup()
 	m, err := metrics.New(db, log)
 	if err != nil {
 		return err
