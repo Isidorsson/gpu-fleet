@@ -11,9 +11,9 @@ COPY controlplane/go.mod controlplane/go.sum ./
 RUN go mod download
 
 COPY controlplane/ ./
-# The cache mount shares compiled packages between the three image builds.
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    : "${CMD:?pass --build-arg CMD=controlplane|bmcsim|chaos}" \
+# No BuildKit cache mount: Railway's builder requires a service-specific
+# mount id, and this Dockerfile is shared by three services.
+RUN : "${CMD:?pass --build-arg CMD=controlplane|bmcsim|chaos}" \
     && test -d "cmd/${CMD}" \
     && go build -trimpath -ldflags="-s -w" -o /out/app "./cmd/${CMD}"
 
