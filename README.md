@@ -60,22 +60,52 @@ swaps in replacements for quarantined nodes and ends them. Chaos also plants
 implants through bmcsim and injects GPU faults into the agents. Details:
 [docs/architecture.md](docs/architecture.md).
 
-## Quick start
+## Run it yourself
+
+The whole system, including the simulated fleet and the chaos service, runs
+locally with Docker Compose. You need Docker (Docker Desktop on Windows and
+macOS) with Compose v2, and free host ports 3000, 5432, 8080, 8443, 9090, 9093
+and 19401 to 19404.
+
+```bash
+git clone https://github.com/Isidorsson/gpu-fleet
+```
+
+```bash
+cd gpu-fleet
+```
 
 ```bash
 docker compose -f deploy/compose.yaml --profile demo up -d --build
 ```
 
-Needs Docker Compose v2 and free host ports 3000, 5432, 8080, 8443, 9090, 9093
-and 19401 to 19404. The first build takes a few minutes, and the 50-node fleet
-needs a few more to pass inspection and attestation.
+The first build takes a few minutes. The 50 simulated nodes then need a few
+more to pass inspection and attestation, after which chaos starts booking
+reservations and injecting faults.
 
 - Grafana, anonymous, opens on the GPU Fleet dashboard: http://localhost:3000
 - Prometheus and its alerts: http://localhost:9090
-- Control plane API: `curl -s localhost:8080/v1/capacity`
+- Alertmanager: http://localhost:9093
+- Control plane API (full, not read-only): http://localhost:8080/v1/capacity
+- What chaos is doing: `docker compose -f deploy/compose.yaml --profile demo logs -f chaos`
 
-Stop it and drop its data with
-`docker compose -f deploy/compose.yaml --profile demo down -v`. More in
+On Windows PowerShell use `curl.exe` rather than `curl`, or open the URLs in a
+browser.
+
+Pause it and keep the fleet:
+
+```bash
+docker compose -f deploy/compose.yaml --profile demo stop
+```
+
+Remove it and its data:
+
+```bash
+docker compose -f deploy/compose.yaml --profile demo down -v
+```
+
+Without `--profile demo`, Compose starts only Postgres, the agents and the
+monitoring stack, for running the control plane from source. More in
 [docs/demo.md](docs/demo.md) and [docs/development.md](docs/development.md#running-the-demo).
 
 ## Repository layout
