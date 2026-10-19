@@ -25,6 +25,8 @@ curl -s https://controlplane-production-6f4e.up.railway.app/v1/attestation/keys 
 curl -s https://controlplane-production-6f4e.up.railway.app/v1/nodes/node-001/attestation  # latest signed result, verifiable offline
 ```
 
+On Windows PowerShell, `curl` is an alias for `Invoke-WebRequest`: use `curl.exe` instead, or open the URLs in a browser.
+
 How it is deployed: [deploy/railway/README.md](deploy/railway/README.md).
 
 ## What it does
