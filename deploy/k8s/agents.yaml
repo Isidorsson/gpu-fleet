@@ -1,0 +1,181 @@
+# Four agents on the fake GPU backend, one per simulated host, as in compose.
+# Each has its own Service (chaos targets agent-node-00N:9400); the headless
+# Service `agent` resolves to all of them for Prometheus DNS discovery.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: agent
+  ports:
+    - port: 9400
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-node-001
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent
+      app.kubernetes.io/instance: node-001
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent
+        app.kubernetes.io/instance: node-001
+    spec:
+      containers:
+        - name: agent
+          image: gpu-fleet-agent:dev
+          env:
+            - name: AGENT_NODE_ID
+              value: node-001
+            - name: AGENT_HOSTNAME
+              value: node-001
+          ports:
+            - containerPort: 9400
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9400
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-node-001
+spec:
+  selector:
+    app.kubernetes.io/name: agent
+    app.kubernetes.io/instance: node-001
+  ports:
+    - port: 9400
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-node-002
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent
+      app.kubernetes.io/instance: node-002
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent
+        app.kubernetes.io/instance: node-002
+    spec:
+      containers:
+        - name: agent
+          image: gpu-fleet-agent:dev
+          env:
+            - name: AGENT_NODE_ID
+              value: node-002
+            - name: AGENT_HOSTNAME
+              value: node-002
+          ports:
+            - containerPort: 9400
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9400
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-node-002
+spec:
+  selector:
+    app.kubernetes.io/name: agent
+    app.kubernetes.io/instance: node-002
+  ports:
+    - port: 9400
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-node-003
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent
+      app.kubernetes.io/instance: node-003
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent
+        app.kubernetes.io/instance: node-003
+    spec:
+      containers:
+        - name: agent
+          image: gpu-fleet-agent:dev
+          env:
+            - name: AGENT_NODE_ID
+              value: node-003
+            - name: AGENT_HOSTNAME
+              value: node-003
+          ports:
+            - containerPort: 9400
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9400
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-node-003
+spec:
+  selector:
+    app.kubernetes.io/name: agent
+    app.kubernetes.io/instance: node-003
+  ports:
+    - port: 9400
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-node-004
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent
+      app.kubernetes.io/instance: node-004
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agent
+        app.kubernetes.io/instance: node-004
+    spec:
+      containers:
+        - name: agent
+          image: gpu-fleet-agent:dev
+          env:
+            - name: AGENT_NODE_ID
+              value: node-004
+            - name: AGENT_HOSTNAME
+              value: node-004
+          ports:
+            - containerPort: 9400
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9400
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-node-004
+spec:
+  selector:
+    app.kubernetes.io/name: agent
+    app.kubernetes.io/instance: node-004
+  ports:
+    - port: 9400

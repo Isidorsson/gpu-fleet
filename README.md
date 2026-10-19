@@ -116,6 +116,7 @@ controlplane/   Go: lifecycle state machine, provisioner, reservations, attestat
 agent/          Rust: per-node GPU health agent, dcgm-exporter compatible metrics (simulated GPUs)
 deploy/         docker compose: Postgres, GPU agents, Prometheus + alerts, Alertmanager, Grafana, demo profile
 deploy/railway/ images and configs for the hosted demo
+deploy/k8s/     kustomize manifests for the demo on Kubernetes (kind)
 site/           project page, deployed to GitHub Pages
 docs/           architecture, development guide and component contracts
 docs/adr/       architecture decision records
@@ -140,6 +141,7 @@ docs/adr/       architecture decision records
 - [Metrics](docs/metrics.md): every metric, dashboard query and alert
 - [BMC protocol](docs/bmc-protocol.md): the Redfish subset and deploy agent contract
 - [ADR 1](docs/adr/0001-go-control-plane-rust-agent.md): Go control plane, Rust agent, one repository
+- [Kubernetes](docs/kubernetes.md): the demo on kind with kustomize, and the CI smoke test
 - [Hosted deployment](deploy/railway/README.md): Railway services, secrets and configs
 
 ## Roadmap
@@ -151,4 +153,4 @@ docs/adr/       architecture decision records
 - [x] Tenant attestation
 - [x] Automated remediation (Alertmanager to quarantine to replacement)
 - [x] One-command demo and hosted read-only showcase
-- [ ] Kubernetes deployment (kind + kustomize, CI smoke test)
+- [x] Kubernetes deployment (kind + kustomize, CI smoke test)

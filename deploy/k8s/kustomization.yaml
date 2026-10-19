@@ -1,0 +1,61 @@
+# The compose demo profile on Kubernetes (docs/kubernetes.md). Alert rules,
+# the dashboard and Grafana provisioning are shared with compose, so build with
+#   kubectl kustomize --load-restrictor LoadRestrictionsNone deploy/k8s
+# Every secret below is dev-only, like the values in deploy/compose.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gpu-fleet
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: gpu-fleet
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - controlplane.yaml
+  - bmcsim.yaml
+  - chaos.yaml
+  - agents.yaml
+  - prometheus.yaml
+  - alertmanager.yaml
+  - grafana.yaml
+
+secretGenerator:
+  - name: postgres
+    literals:
+      - POSTGRES_USER=fleet
+      - POSTGRES_PASSWORD=fleet-dev-only
+      - POSTGRES_DB=fleet
+  - name: bmc-credentials
+    literals:
+      - BMCSIM_USER=sim
+      - BMCSIM_PASSWORD=sim-dev-only
+  - name: controlplane
+    literals:
+      - DATABASE_URL=postgres://fleet:fleet-dev-only@postgres:5432/fleet?sslmode=disable
+      # base64 of the 32 bytes "demo-only-attest-signing-key-001"
+      - ATTEST_SIGNING_KEY=ZGVtby1vbmx5LWF0dGVzdC1zaWduaW5nLWtleS0wMDE=
+      - REMEDIATION_WEBHOOK_TOKEN=remediation-dev-only
+  - name: alertmanager-webhook
+    files:
+      - ../alertmanager/webhook_token
+
+configMapGenerator:
+  - name: prometheus
+    files:
+      - prometheus.yml
+      - ../prometheus/alerts.yml
+  - name: alertmanager
+    files:
+      - alertmanager.yml
+  - name: grafana-datasources
+    files:
+      - ../grafana/provisioning/datasources/prometheus.yml
+  - name: grafana-dashboard-providers
+    files:
+      - ../grafana/provisioning/dashboards/dashboards.yml
+  - name: grafana-dashboards
+    files:
+      - ../grafana/dashboards/gpu-fleet.json

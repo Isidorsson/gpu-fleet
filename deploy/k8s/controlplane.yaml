@@ -1,0 +1,53 @@
+# Images are the compose demo builds (gpu-fleet-*:dev), loaded into the
+# cluster with `kind load docker-image`; a non-latest tag defaults to
+# imagePullPolicy IfNotPresent, so nothing is pulled. The control plane exits
+# while Postgres is not ready yet and the restart policy absorbs it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controlplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: controlplane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: controlplane
+    spec:
+      containers:
+        - name: controlplane
+          image: gpu-fleet-controlplane:dev
+          envFrom:
+            - secretRef:
+                name: controlplane
+          env:
+            - name: ATTEST_REFERENCE
+              value: /etc/gpu-fleet/reference.json
+            - name: BMC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bmc-credentials
+                  key: BMCSIM_USER
+            - name: BMC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bmc-credentials
+                  key: BMCSIM_PASSWORD
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controlplane
+spec:
+  selector:
+    app.kubernetes.io/name: controlplane
+  ports:
+    - port: 8080

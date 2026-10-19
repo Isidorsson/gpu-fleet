@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alertmanager
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.34.1
+          ports:
+            - containerPort: 9093
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9093
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: webhook-token
+              mountPath: /etc/alertmanager-secrets
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager
+        - name: webhook-token
+          secret:
+            secretName: alertmanager-webhook
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+spec:
+  selector:
+    app.kubernetes.io/name: alertmanager
+  ports:
+    - port: 9093
