@@ -30,7 +30,7 @@ var workerConfig = provisioner.Config{
 // startWorkers runs PROVISIONER_WORKERS provisioner workers until ctx ends.
 // Each gets a unique owner so leases from this process and its replicas never
 // collide. BMC credentials come from BMC_USER and BMC_PASSWORD.
-func startWorkers(ctx context.Context, db *store.Postgres, log *slog.Logger) (*sync.WaitGroup, error) {
+func startWorkers(ctx context.Context, db *store.Postgres, m provisioner.Metrics, log *slog.Logger) (*sync.WaitGroup, error) {
 	count, err := workerCount()
 	if err != nil {
 		return nil, err
@@ -51,7 +51,7 @@ func startWorkers(ctx context.Context, db *store.Postgres, log *slog.Logger) (*s
 	for i := range count {
 		cfg := workerConfig
 		cfg.Owner = fmt.Sprintf("%s/%d/%d", host, os.Getpid(), i)
-		w, err := provisioner.NewWorker(cfg, provisioner.Deps{Store: db, Dial: dial, Log: log})
+		w, err := provisioner.NewWorker(cfg, provisioner.Deps{Store: db, Dial: dial, Log: log, Metrics: m})
 		if err != nil {
 			return nil, err
 		}

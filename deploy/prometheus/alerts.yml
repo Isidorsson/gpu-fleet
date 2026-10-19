@@ -1,0 +1,47 @@
+groups:
+  - name: gpu-fleet
+    rules:
+      - alert: GPUFatalXid
+        expr: gpu_agent_gpu_healthy == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} is unhealthy"
+          description: "{{ $labels.modelName }} {{ $labels.UUID }} on {{ $labels.Hostname }} (gpu {{ $labels.gpu }}) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
+
+      - alert: QuarantineSpike
+        expr: sum(increase(provisioner_events_total{event=~"inspection_failed|wipe_failed|hardware_fault"}[15m])) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nodes are being quarantined faster than expected"
+          description: "{{ $value | humanize }} inspection_failed, wipe_failed and hardware_fault events in the last 15m (threshold 5)."
+
+      - alert: GPUAgentDown
+        expr: up{job="gpu-agent"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU agent {{ $labels.instance }} is down"
+          description: "Prometheus has failed to scrape the GPU agent at {{ $labels.instance }} for 2m."
+
+      - alert: GPUAgentStale
+        expr: time() - gpu_agent_last_sample_timestamp_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU agent on {{ $labels.Hostname }} has stopped sampling"
+          description: "The agent on {{ $labels.Hostname }} last sampled its GPUs {{ $value | humanizeDuration }} ago."
+
+      - alert: ControlPlaneDown
+        expr: up{job="controlplane"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control plane {{ $labels.instance }} is down"
+          description: "Prometheus has failed to scrape the control plane at {{ $labels.instance }} for 2m."

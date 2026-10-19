@@ -37,6 +37,9 @@ var allEvents = []Event{
 	EventHardwareFault, EventRepaired,
 }
 
+// States returns every lifecycle state.
+func States() []State { return slices.Clone(allStates) }
+
 // Register returns a freshly racked node.
 func Register(id, rack, bmc string) Node {
 	return Node{ID: id, Rack: rack, BMC: bmc, State: StateRacked}

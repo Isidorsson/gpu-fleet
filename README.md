@@ -6,7 +6,7 @@ reservations and GPU health, runnable on a laptop against a simulated fleet.
 ```
 controlplane/   Go: lifecycle state machine, provisioning + capacity APIs
 agent/          Rust: per-node GPU health agent (NVML, fake backend for dev)
-deploy/         docker compose: Postgres, Prometheus, Grafana
+deploy/         docker compose: Postgres, GPU agents, Prometheus + alerts, Grafana
 docs/adr/       architecture decision records
 ```
 
@@ -67,6 +67,11 @@ with seeded failure injection, so the whole flow runs on a laptop.
 docker compose -f deploy/compose.yaml up -d
 ```
 
+This starts Postgres, Prometheus, Grafana and the GPU agents (3 `agent`
+replicas plus `agent-faulty`, which injects XID 79 on GPU 3), all on the fake
+GPU backend. The control plane runs on the host. Start only the observability
+side with `docker compose -f deploy/compose.yaml up -d prometheus grafana`.
+
 Simulated fleet (50 nodes, 5% inspection failures, 1% flaky BMC requests):
 
 ```bash
@@ -100,12 +105,45 @@ cd controlplane && go test -race ./...
 cd agent && cargo test && FAKE_XID=3:79 cargo run
 ```
 
-Grafana: http://localhost:3000, Prometheus: http://localhost:9090.
+An agent run on the host is not scraped: Prometheus discovers the compose
+`agent` services only.
+
+Grafana: http://localhost:3000 (anonymous, opens on the GPU Fleet dashboard),
+Prometheus: http://localhost:9090.
+
+## Observability
+
+[docs/metrics.md](docs/metrics.md) is the contract for every metric, dashboard
+query and alert. Prometheus scrapes the control plane at
+`host.docker.internal:8080` and the agents on :9400 (DNS A records for the
+`agent` and `agent-faulty` services).
+
+```
+deploy/prometheus/prometheus.yml    scrape config
+deploy/prometheus/alerts.yml        alert rules (see localhost:9090/alerts)
+deploy/prometheus/alerts_test.yml   promtool unit tests for the rules
+deploy/grafana/                     provisioned datasource and the GPU Fleet dashboard
+```
+
+`agent-faulty` makes `GPUFatalXid` fire about a minute after startup. The
+`observability` CI job runs `promtool check config`, `check rules` and
+`test rules` from the pinned Prometheus image, and checks that every dashboard
+panel queries the `prometheus` datasource. To run the same checks locally:
+
+```bash
+image=$(docker compose -f deploy/compose.yaml config --images | grep '^prom/prometheus:')
+promtool() { docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/etc/prometheus:ro" "$image" "$@"; }
+promtool check config /etc/prometheus/prometheus.yml
+promtool check rules /etc/prometheus/alerts.yml
+promtool test rules /etc/prometheus/alerts_test.yml
+```
+
+On Windows Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1`.
 
 ## Roadmap
 
 1. ~~Postgres-backed node store and lifecycle API~~
 2. ~~Simulated Redfish BMC fleet + provisioner workers~~
-3. Agent `/metrics` exporter on :9400, Grafana dashboard
+3. ~~Agent `/metrics` exporter on :9400, Grafana dashboard~~
 4. Capacity reservations with topology awareness
 5. Stretch: Kubernetes remediation operator or tenant attestation

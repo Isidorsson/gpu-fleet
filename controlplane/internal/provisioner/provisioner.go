@@ -89,14 +89,17 @@ type Deps struct {
 	Clock Clock
 	// Log defaults to slog.Default().
 	Log *slog.Logger
+	// Metrics defaults to discarding everything.
+	Metrics Metrics
 }
 
 type Worker struct {
-	cfg   Config
-	store Store
-	dial  Dial
-	clock Clock
-	log   *slog.Logger
+	cfg     Config
+	store   Store
+	dial    Dial
+	clock   Clock
+	log     *slog.Logger
+	metrics Metrics
 }
 
 func NewWorker(cfg Config, deps Deps) (*Worker, error) {
@@ -106,12 +109,15 @@ func NewWorker(cfg Config, deps Deps) (*Worker, error) {
 	if deps.Store == nil || deps.Dial == nil {
 		return nil, fmt.Errorf("%w: Store and Dial are required", ErrInvalidConfig)
 	}
-	w := &Worker{cfg: cfg, store: deps.Store, dial: deps.Dial, clock: deps.Clock, log: deps.Log}
+	w := &Worker{cfg: cfg, store: deps.Store, dial: deps.Dial, clock: deps.Clock, log: deps.Log, metrics: deps.Metrics}
 	if w.clock == nil {
 		w.clock = wallClock{}
 	}
 	if w.log == nil {
 		w.log = slog.Default()
+	}
+	if w.metrics == nil {
+		w.metrics = noopMetrics{}
 	}
 	return w, nil
 }

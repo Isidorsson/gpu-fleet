@@ -53,15 +53,16 @@ func (s *session) runTask(ctx context.Context, task deployagent.Task) (deployage
 func (s *session) startTask(ctx context.Context, task deployagent.Task) error {
 	id := s.n.ID
 	steps := []struct {
-		op string
-		fn func(context.Context) error
+		op   BMCOp
+		name string
+		fn   func(context.Context) error
 	}{
-		{"set task", func(ctx context.Context) error { return s.agent.SetTask(ctx, id, task) }},
-		{"set pxe boot once", func(ctx context.Context) error { return s.bmc.SetPXEBootOnce(ctx, id) }},
-		{"force restart", func(ctx context.Context) error { return s.bmc.Reset(ctx, id, redfish.ResetForceRestart) }},
+		{OpSetTask, "set task", func(ctx context.Context) error { return s.agent.SetTask(ctx, id, task) }},
+		{OpSetPXE, "set pxe boot once", func(ctx context.Context) error { return s.bmc.SetPXEBootOnce(ctx, id) }},
+		{OpReset, "force restart", func(ctx context.Context) error { return s.bmc.Reset(ctx, id, redfish.ResetForceRestart) }},
 	}
 	for _, step := range steps {
-		if err := s.call(ctx, step.op, step.fn); err != nil {
+		if err := s.call(ctx, step.op, step.name, step.fn); err != nil {
 			return err
 		}
 	}
@@ -74,14 +75,14 @@ func (s *session) forceOff(ctx context.Context) error {
 	if err := s.renew(ctx); err != nil {
 		return err
 	}
-	return s.call(ctx, "force off", func(ctx context.Context) error {
+	return s.call(ctx, OpReset, "force off", func(ctx context.Context) error {
 		return s.bmc.Reset(ctx, s.n.ID, redfish.ResetForceOff)
 	})
 }
 
 func (s *session) status(ctx context.Context) (deployagent.Status, error) {
 	var st deployagent.Status
-	err := s.call(ctx, "agent status", func(ctx context.Context) (err error) {
+	err := s.call(ctx, OpStatus, "agent status", func(ctx context.Context) (err error) {
 		st, err = s.agent.Status(ctx, s.n.ID)
 		return err
 	})
@@ -91,30 +92,33 @@ func (s *session) status(ctx context.Context) (deployagent.Status, error) {
 // call runs fn, retrying transient failures with doubling backoff up to
 // MaxAttempts tries in total. The lease is renewed after each backoff so a
 // long retry sequence cannot outlive it. Exhausted retries and permanent
-// errors come back as a faultError.
-func (s *session) call(ctx context.Context, op string, fn func(context.Context) error) error {
+// errors come back as a faultError. Every attempt is reported to Metrics under
+// op, except one cut short by ctx: a shutdown says nothing about the BMC. name
+// is for logs and errors.
+func (s *session) call(ctx context.Context, op BMCOp, name string, fn func(context.Context) error) error {
 	cfg := s.w.cfg
 	backoff := cfg.RetryBackoff
 	for attempt := 1; ; attempt++ {
 		err := fn(ctx)
+		if err != nil && ctx.Err() != nil {
+			return fmt.Errorf("%s: %w", name, ctx.Err())
+		}
+		s.w.metrics.BMCRequest(op, resultOf(err))
 		if err == nil {
 			return nil
 		}
-		if ctx.Err() != nil {
-			return fmt.Errorf("%s: %w", op, ctx.Err())
-		}
-		log := s.logger().With("op", op, "attempt", attempt, "error", err)
+		log := s.logger().With("op", name, "attempt", attempt, "error", err)
 		if !isTransient(err) {
 			log.Error("call failed")
-			return &faultError{fmt.Errorf("%s: %w", op, err)}
+			return &faultError{fmt.Errorf("%s: %w", name, err)}
 		}
 		if attempt >= cfg.MaxAttempts {
 			log.Error("call failed, retries exhausted", "max_attempts", cfg.MaxAttempts)
-			return &faultError{fmt.Errorf("%s: gave up after %d attempts: %w", op, attempt, err)}
+			return &faultError{fmt.Errorf("%s: gave up after %d attempts: %w", name, attempt, err)}
 		}
 		log.Warn("call failed, retrying", "backoff", backoff)
 		if err := s.w.clock.Sleep(ctx, backoff); err != nil {
-			return fmt.Errorf("%s: backoff: %w", op, err)
+			return fmt.Errorf("%s: backoff: %w", name, err)
 		}
 		if err := s.renew(ctx); err != nil {
 			return err

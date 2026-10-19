@@ -40,6 +40,7 @@ type harness struct {
 	machine *fakeMachine
 	clock   *fakeClock
 	logs    *bytes.Buffer
+	metrics *recordingMetrics
 	worker  *Worker
 	start   time.Time
 }
@@ -51,6 +52,7 @@ func newHarness(t *testing.T, mutate ...func(*Config)) *harness {
 		machine: newFakeMachine(),
 		clock:   newFakeClock(),
 		logs:    &bytes.Buffer{},
+		metrics: &recordingMetrics{},
 	}
 	h.start = h.clock.Now()
 	cfg := testConfig()
@@ -58,7 +60,7 @@ func newHarness(t *testing.T, mutate ...func(*Config)) *harness {
 		m(&cfg)
 	}
 	log := slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	w, err := NewWorker(cfg, Deps{Store: h.store, Dial: h.machine.dial, Clock: h.clock, Log: log})
+	w, err := NewWorker(cfg, Deps{Store: h.store, Dial: h.machine.dial, Clock: h.clock, Log: log, Metrics: h.metrics})
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}

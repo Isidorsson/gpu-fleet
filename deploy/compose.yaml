@@ -1,5 +1,11 @@
-# Local dev stack. Control plane and agent run on the host for now and are
-# scraped through host.docker.internal.
+# Local dev stack. The control plane runs on the host and is scraped through
+# host.docker.internal. Agents run here on the fake GPU backend.
+x-agent: &agent
+  build:
+    context: ../agent
+    dockerfile: Dockerfile
+  image: gpu-fleet-agent:dev
+
 services:
   postgres:
     image: postgres:17.6
@@ -14,9 +20,22 @@ services:
       interval: 5s
       retries: 10
 
+  agent:
+    <<: *agent
+    deploy:
+      replicas: 3
+
+  agent-faulty:
+    <<: *agent
+    environment:
+      AGENT_HOSTNAME: agent-faulty
+      FAKE_XID: "3:79"
+
   prometheus:
     image: prom/prometheus:v3.5.0
-    volumes: [./prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports: ["9090:9090"]
     extra_hosts: ["host.docker.internal:host-gateway"]
 
@@ -24,7 +43,11 @@ services:
     image: grafana/grafana:12.1.1
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/gpu-fleet.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports: ["3000:3000"]
     depends_on: [prometheus]
 

@@ -109,6 +109,26 @@ func (p *Postgres) List(ctx context.Context, state node.State) ([]node.Node, err
 	return pgx.CollectRows(rows, scanNode)
 }
 
+// CountByState returns how many nodes are in each state. States without nodes
+// are absent from the map.
+func (p *Postgres) CountByState(ctx context.Context) (map[node.State]int, error) {
+	rows, err := p.pool.Query(ctx, `SELECT state, count(*) FROM nodes GROUP BY state`)
+	if err != nil {
+		return nil, fmt.Errorf("count nodes by state: %w", err)
+	}
+	counts := map[node.State]int{}
+	var state string
+	var count int
+	_, err = pgx.ForEachRow(rows, []any{&state, &count}, func() error {
+		counts[node.State(state)] = count
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan state counts: %w", err)
+	}
+	return counts, nil
+}
+
 func (p *Postgres) Events(ctx context.Context, id string) ([]EventRecord, error) {
 	if _, err := p.Get(ctx, id); err != nil {
 		return nil, err

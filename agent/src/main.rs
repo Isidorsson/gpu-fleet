@@ -1,53 +1,63 @@
+mod config;
+mod fake;
 mod gpu;
+mod metrics;
+mod sampler;
+mod server;
+mod shutdown;
 
-use gpu::{FakeBackend, GpuBackend, InjectedXid};
+use std::process::ExitCode;
+use std::sync::Arc;
 
-const DEFAULT_FAKE_GPUS: usize = 8;
-const FAKE_XID_ENV: &str = "FAKE_XID";
+use config::Config;
+use fake::FakeBackend;
+use metrics::Metrics;
+use sampler::{Sampler, system_clock};
+use server::AppState;
+use shutdown::Shutdown;
+use tokio::net::TcpListener;
 
-fn main() {
-    let mut backend = FakeBackend::new(DEFAULT_FAKE_GPUS);
-    if let Ok(raw) = std::env::var(FAKE_XID_ENV) {
-        let Some(x) = parse_injected_xid(&raw) else {
-            eprintln!("{FAKE_XID_ENV} must look like <gpu>:<code>, got {raw:?}");
-            std::process::exit(2);
-        };
-        backend = backend.with_xid(x);
-    }
+const EXIT_BAD_CONFIG: u8 = 2;
 
-    for s in backend.sample() {
-        println!(
-            "gpu={} temp_c={} power_w={:.0} healthy={}",
-            s.index,
-            s.temperature_c,
-            s.power_w,
-            s.is_healthy()
-        );
-    }
-}
-
-fn parse_injected_xid(raw: &str) -> Option<InjectedXid> {
-    let (gpu, code) = raw.split_once(':')?;
-    Some(InjectedXid {
-        gpu: gpu.trim().parse().ok()?,
-        code: code.trim().parse().ok()?,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_gpu_and_code() {
-        let x = parse_injected_xid("3:79").expect("valid input");
-        assert_eq!((x.gpu, x.code), (3, 79));
-    }
-
-    #[test]
-    fn rejects_malformed_input() {
-        for raw in ["", "3", "a:79", "3:", "3:x"] {
-            assert!(parse_injected_xid(raw).is_none(), "{raw:?} should fail");
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> ExitCode {
+    let config = match Config::from_env() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("gpu-agent: {e}");
+            return ExitCode::from(EXIT_BAD_CONFIG);
+        }
+    };
+    match run(config).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("gpu-agent: {e}");
+            ExitCode::FAILURE
         }
     }
+}
+
+async fn run(config: Config) -> Result<(), String> {
+    let shutdown = Shutdown::install().map_err(|e| format!("installing signal handlers: {e}"))?;
+    let listener = TcpListener::bind(config.listen)
+        .await
+        .map_err(|e| format!("binding {}: {e}", config.listen))?;
+
+    let backend =
+        FakeBackend::new(config.fake_gpus, config.hostname.as_str()).with_xid(config.fake_xid);
+    let metrics = Arc::new(Metrics::new(config.hostname.as_str()));
+    let (sampler, snapshots) = Sampler::new(backend, system_clock, metrics.counters().clone());
+    let sampler_task = tokio::spawn(sampler.run(config.sample_interval));
+
+    eprintln!(
+        "gpu-agent: serving {} fake GPUs as {:?} on {}",
+        config.fake_gpus, config.hostname, config.listen
+    );
+    let app = server::router(AppState::new(metrics, snapshots));
+    let served = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.requested())
+        .await;
+
+    sampler_task.abort();
+    served.map_err(|e| format!("serving: {e}"))
 }

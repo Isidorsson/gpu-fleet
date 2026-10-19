@@ -1,0 +1,167 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  - name: GPUFatalXid fires after 1m unhealthy, only for the unhealthy GPU
+    interval: 15s
+    input_series:
+      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", instance="10.0.0.2:9400", Hostname="node-a", gpu="0", UUID="GPU-node-a-0", modelName="H100"}'
+        values: "1+0x40"
+      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", instance="10.0.0.2:9400", Hostname="node-a", gpu="3", UUID="GPU-node-a-3", modelName="H100"}'
+        values: "1+0x4 0+0x40"
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: GPUFatalXid
+        exp_alerts: []
+      - eval_time: 120s
+        alertname: GPUFatalXid
+        exp_alerts: []
+      - eval_time: 150s
+        alertname: GPUFatalXid
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: gpu-agent
+              instance: 10.0.0.2:9400
+              Hostname: node-a
+              gpu: "3"
+              UUID: GPU-node-a-3
+              modelName: H100
+            exp_annotations:
+              summary: "GPU 3 on node-a is unhealthy"
+              description: "H100 GPU-node-a-3 on node-a (gpu 3) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
+
+  - name: GPUFatalXid resolves when the GPU recovers
+    interval: 15s
+    input_series:
+      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", Hostname="node-a", gpu="3", UUID="GPU-node-a-3", modelName="H100"}'
+        values: "1+0x4 0+0x12 1+0x20"
+    alert_rule_test:
+      - eval_time: 180s
+        alertname: GPUFatalXid
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: gpu-agent
+              Hostname: node-a
+              gpu: "3"
+              UUID: GPU-node-a-3
+              modelName: H100
+            exp_annotations:
+              summary: "GPU 3 on node-a is unhealthy"
+              description: "H100 GPU-node-a-3 on node-a (gpu 3) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
+      - eval_time: 300s
+        alertname: GPUFatalXid
+        exp_alerts: []
+
+  - name: QuarantineSpike counts the three quarantine causes together
+    interval: 1m
+    input_series:
+      - series: 'provisioner_events_total{event="hardware_fault"}'
+        values: "0x9 3x20"
+      - series: 'provisioner_events_total{event="inspection_failed"}'
+        values: "0x9 3x20"
+      - series: 'provisioner_events_total{event="wipe_failed"}'
+        values: "0x30"
+      - series: 'provisioner_events_total{event="provision"}'
+        values: "0+50x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: QuarantineSpike
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: QuarantineSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Nodes are being quarantined faster than expected"
+              description: "6 inspection_failed, wipe_failed and hardware_fault events in the last 15m (threshold 5)."
+
+  - name: QuarantineSpike stays quiet at the threshold
+    interval: 1m
+    input_series:
+      - series: 'provisioner_events_total{event="hardware_fault"}'
+        values: "0x9 3x20"
+      - series: 'provisioner_events_total{event="wipe_failed"}'
+        values: "0x9 2x20"
+      - series: 'provisioner_events_total{event="provision"}'
+        values: "0+50x30"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: QuarantineSpike
+        exp_alerts: []
+
+  - name: GPUAgentDown fires after 2m, only for the agent that is down
+    interval: 15s
+    input_series:
+      - series: 'up{job="gpu-agent", instance="10.0.0.2:9400"}'
+        values: "1+0x1 0+0x40"
+      - series: 'up{job="gpu-agent", instance="10.0.0.3:9400"}'
+        values: "1+0x40"
+      - series: 'up{job="controlplane", instance="host.docker.internal:8080"}'
+        values: "1+0x40"
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: GPUAgentDown
+        exp_alerts: []
+      - eval_time: 120s
+        alertname: GPUAgentDown
+        exp_alerts: []
+      - eval_time: 180s
+        alertname: GPUAgentDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: gpu-agent
+              instance: 10.0.0.2:9400
+            exp_annotations:
+              summary: "GPU agent 10.0.0.2:9400 is down"
+              description: "Prometheus has failed to scrape the GPU agent at 10.0.0.2:9400 for 2m."
+      - eval_time: 180s
+        alertname: ControlPlaneDown
+        exp_alerts: []
+
+  - name: ControlPlaneDown fires after 2m
+    interval: 15s
+    input_series:
+      - series: 'up{job="controlplane", instance="host.docker.internal:8080"}'
+        values: "1+0x1 0+0x40"
+    alert_rule_test:
+      - eval_time: 120s
+        alertname: ControlPlaneDown
+        exp_alerts: []
+      - eval_time: 180s
+        alertname: ControlPlaneDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: controlplane
+              instance: host.docker.internal:8080
+            exp_annotations:
+              summary: "Control plane host.docker.internal:8080 is down"
+              description: "Prometheus has failed to scrape the control plane at host.docker.internal:8080 for 2m."
+
+  - name: GPUAgentStale fires when the last sample is over 60s old for 2m
+    interval: 15s
+    input_series:
+      - series: 'gpu_agent_last_sample_timestamp_seconds{job="gpu-agent", Hostname="node-a"}'
+        values: "0+15x10 150+0x60"
+      - series: 'gpu_agent_last_sample_timestamp_seconds{job="gpu-agent", Hostname="node-b"}'
+        values: "0+15x70"
+    alert_rule_test:
+      - eval_time: 300s
+        alertname: GPUAgentStale
+        exp_alerts: []
+      - eval_time: 360s
+        alertname: GPUAgentStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: gpu-agent
+              Hostname: node-a
+            exp_annotations:
+              summary: "GPU agent on node-a has stopped sampling"
+              description: "The agent on node-a last sampled its GPUs 3m 30s ago."

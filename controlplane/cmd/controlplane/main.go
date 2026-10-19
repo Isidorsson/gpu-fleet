@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gpu-fleet/controlplane/internal/api"
+	"gpu-fleet/controlplane/internal/metrics"
 	"gpu-fleet/controlplane/internal/store"
 )
 
@@ -25,6 +26,14 @@ func main() {
 		slog.Error("controlplane exited", "err", err)
 		os.Exit(1)
 	}
+}
+
+// newHandler serves GET /metrics next to the API on one listener.
+func newHandler(apiHandler, metricsHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metricsHandler)
+	mux.Handle("/", apiHandler)
+	return mux
 }
 
 func run() error {
@@ -50,7 +59,11 @@ func run() error {
 	}
 
 	log := slog.Default()
-	workers, err := startWorkers(ctx, db, log)
+	m, err := metrics.New(db, log)
+	if err != nil {
+		return err
+	}
+	workers, err := startWorkers(ctx, db, m.Provisioner(), log)
 	if err != nil {
 		return err
 	}
@@ -58,7 +71,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.NewHandler(db, log),
+		Handler:           newHandler(api.NewHandler(db, log), m.Handler()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errc := make(chan error, 1)

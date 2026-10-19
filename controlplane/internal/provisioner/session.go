@@ -79,6 +79,7 @@ func (s *session) run(ctx context.Context) error {
 	switch {
 	case errors.Is(err, store.ErrLeaseLost):
 		s.logger().Warn("lease lost, abandoning node", "error", err)
+		s.w.metrics.LeaseLost()
 		return nil
 	case errors.Is(err, node.ErrInvalidTransition):
 		s.logger().Warn("node changed under us, operator wins", "error", err)
@@ -107,8 +108,17 @@ func (s *session) advance(ctx context.Context) error {
 	return s.execute(ctx, plans[s.n.State])
 }
 
+// execute runs one task and records it, timed from the first call to the
+// applied event.
 func (s *session) execute(ctx context.Context, p plan) error {
 	s.task = p.task
+	start := s.w.clock.Now()
+	outcome, err := s.process(ctx, p)
+	s.w.metrics.TaskFinished(p.task, outcome, s.w.clock.Now().Sub(start))
+	return err
+}
+
+func (s *session) process(ctx context.Context, p plan) (Outcome, error) {
 	phase, err := s.runTask(ctx, p.task)
 	if err == nil {
 		s.logger().Info("task finished", "phase", phase)
@@ -120,21 +130,30 @@ func (s *session) execute(ctx context.Context, p plan) error {
 		return s.quarantineOnFault(ctx, err)
 	}
 	if phase == deployagent.PhaseFailed {
-		return s.apply(ctx, p.failure)
+		return s.settle(ctx, p.failure, OutcomeFailed)
 	}
-	return s.apply(ctx, p.success)
+	return s.settle(ctx, p.success, OutcomeSucceeded)
 }
 
 // quarantineOnFault turns a node fault into hardware_fault. Anything else
 // (lease lost, shutdown, store errors) says nothing about the node and is
 // returned as is.
-func (s *session) quarantineOnFault(ctx context.Context, err error) error {
+func (s *session) quarantineOnFault(ctx context.Context, err error) (Outcome, error) {
 	var fault *faultError
 	if !errors.As(err, &fault) {
-		return err
+		return OutcomeAbandoned, err
 	}
 	s.logger().Error("node fault, quarantining", "event", node.EventHardwareFault, "error", err)
-	return s.apply(ctx, node.EventHardwareFault)
+	return s.settle(ctx, node.EventHardwareFault, OutcomeFault)
+}
+
+// settle applies the event that ends a task. If it cannot be applied the
+// task counts as abandoned, whatever the agent reported.
+func (s *session) settle(ctx context.Context, ev node.Event, outcome Outcome) (Outcome, error) {
+	if err := s.apply(ctx, ev); err != nil {
+		return OutcomeAbandoned, err
+	}
+	return outcome, nil
 }
 
 func (s *session) apply(ctx context.Context, ev node.Event) error {
@@ -143,6 +162,7 @@ func (s *session) apply(ctx context.Context, ev node.Event) error {
 		return fmt.Errorf("apply %s to node %s: %w", ev, s.n.ID, err)
 	}
 	s.logger().Info("event applied", "event", ev, "to", next.State)
+	s.w.metrics.EventApplied(ev)
 	s.n = next
 	return nil
 }

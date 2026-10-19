@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"sync"
 	"testing"
@@ -263,6 +264,33 @@ func TestListFiltersByState(t *testing.T) {
 	}
 	if len(nodes) != 1 || nodes[0].ID != "available" {
 		t.Fatalf("List(available) = %+v, want only the available node", nodes)
+	}
+}
+
+func TestCountByState(t *testing.T) {
+	p := openTestStore(t)
+	ctx := context.Background()
+
+	empty, err := p.CountByState(ctx)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("CountByState on empty table = %v, %v; want empty map", empty, err)
+	}
+
+	registerIn(t, p, "r1", node.StateRacked)
+	registerIn(t, p, "r2", node.StateRacked)
+	registerIn(t, p, "a1", node.StateAvailable)
+	registerIn(t, p, "q1", node.StateQuarantined)
+	registerIn(t, p, "w1", node.StateWiping)
+
+	got, err := p.CountByState(ctx)
+	if err != nil {
+		t.Fatalf("CountByState: %v", err)
+	}
+	want := map[node.State]int{
+		node.StateRacked: 2, node.StateAvailable: 1, node.StateQuarantined: 1, node.StateWiping: 1,
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("CountByState = %v, want %v", got, want)
 	}
 }
 
