@@ -50,6 +50,12 @@ func run() error {
 	}
 
 	log := slog.Default()
+	workers, err := startWorkers(ctx, db, log)
+	if err != nil {
+		return err
+	}
+	defer workers.Wait()
+
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           api.NewHandler(db, log),
@@ -63,6 +69,7 @@ func run() error {
 
 	select {
 	case err := <-errc:
+		stop()
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 	}

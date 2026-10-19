@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"gpu-fleet/controlplane/internal/node"
@@ -51,6 +53,7 @@ func NewHandler(s Store, log *slog.Logger) http.Handler {
 type nodeJSON struct {
 	ID     string `json:"id"`
 	Rack   string `json:"rack"`
+	BMC    string `json:"bmc"`
 	State  string `json:"state"`
 	Tenant string `json:"tenant,omitempty"`
 }
@@ -67,6 +70,7 @@ func (s *server) registerNode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID   string `json:"id"`
 		Rack string `json:"rack"`
+		BMC  string `json:"bmc"`
 	}
 	if err := decode(w, r, &req); err != nil {
 		s.writeError(w, err)
@@ -76,12 +80,29 @@ func (s *server) registerNode(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, fmt.Errorf("%w: id must match %s and rack is required", errInvalid, validID))
 		return
 	}
-	n := node.Register(req.ID, req.Rack)
+	if !validBMC(req.BMC) {
+		s.writeError(w, fmt.Errorf("%w: bmc must be an absolute http or https URL with a host, no credentials, query or fragment", errInvalid))
+		return
+	}
+	n := node.Register(req.ID, req.Rack, req.BMC)
 	if err := s.store.Register(r.Context(), n); err != nil {
 		s.writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, toNodeJSON(n))
+}
+
+// validBMC rejects credentials because the URL is echoed back by the API;
+// the BMC's login belongs in the control plane's own configuration.
+func validBMC(raw string) bool {
+	if strings.ContainsAny(raw, "?#") {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User != nil || u.Hostname() == "" {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
 }
 
 func (s *server) listNodes(w http.ResponseWriter, r *http.Request) {
@@ -194,5 +215,5 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func toNodeJSON(n node.Node) nodeJSON {
-	return nodeJSON{ID: n.ID, Rack: n.Rack, State: string(n.State), Tenant: n.Tenant}
+	return nodeJSON{ID: n.ID, Rack: n.Rack, BMC: n.BMC, State: string(n.State), Tenant: n.Tenant}
 }

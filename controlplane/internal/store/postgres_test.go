@@ -7,16 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"gpu-fleet/controlplane/internal/node"
 )
 
 // Integration tests run against TEST_DATABASE_URL and are skipped without it.
-// Each test uses node IDs derived from its own name, so tests share one
-// migrated database without truncating between runs.
+// Each test gets its own schema, created before and dropped after, so tests
+// are isolated even for queries that look at every node (ClaimWork).
 func openTestStore(t *testing.T) *Postgres {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -24,7 +26,13 @@ func openTestStore(t *testing.T) *Postgres {
 		t.Skip("TEST_DATABASE_URL not set")
 	}
 	ctx := context.Background()
-	p, err := Open(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = createTestSchema(t, url)
+
+	p, err := openPool(ctx, cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -35,24 +43,68 @@ func openTestStore(t *testing.T) *Postgres {
 	return p
 }
 
-func uniqueID(t *testing.T, label string) string {
+func createTestSchema(t *testing.T, url string) string {
 	t.Helper()
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
 		t.Fatalf("rand: %v", err)
 	}
-	return strings.ReplaceAll(t.Name(), "/", "-") + "-" + label + "-" + hex.EncodeToString(b)
+	schema := "test_" + hex.EncodeToString(suffix)
+	quoted := pgx.Identifier{schema}.Sanitize()
+	execAdmin(t, url, "CREATE SCHEMA "+quoted)
+	t.Cleanup(func() { execAdmin(t, url, "DROP SCHEMA "+quoted+" CASCADE") })
+	return schema
 }
 
-func registerAvailable(t *testing.T, p *Postgres, id string) {
+func execAdmin(t *testing.T, url, sql string) {
 	t.Helper()
 	ctx := context.Background()
-	if err := p.Register(ctx, node.Register(id, "r1")); err != nil {
-		t.Fatalf("register: %v", err)
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
 	}
-	for _, ev := range []node.Event{node.EventStartInspection, node.EventInspectionPassed} {
-		if _, err := p.ApplyEvent(ctx, id, ev, ""); err != nil {
-			t.Fatalf("apply %s: %v", ev, err)
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, sql); err != nil {
+		t.Fatalf("%s: %v", sql, err)
+	}
+}
+
+func testBMC(id string) string { return "http://" + id + ".bmc.test:8443" }
+
+func register(t *testing.T, p *Postgres, id string) {
+	t.Helper()
+	if err := p.Register(context.Background(), node.Register(id, "r1", testBMC(id))); err != nil {
+		t.Fatalf("register %s: %v", id, err)
+	}
+}
+
+// pathTo lists the events that take a freshly racked node to each state.
+var pathTo = map[node.State][]node.Event{
+	node.StateRacked:       nil,
+	node.StateInspecting:   {node.EventStartInspection},
+	node.StateAvailable:    {node.EventStartInspection, node.EventInspectionPassed},
+	node.StateProvisioning: {node.EventStartInspection, node.EventInspectionPassed, node.EventProvision},
+	node.StateActive: {
+		node.EventStartInspection, node.EventInspectionPassed, node.EventProvision,
+		node.EventProvisionSucceeded,
+	},
+	node.StateWiping: {
+		node.EventStartInspection, node.EventInspectionPassed, node.EventProvision,
+		node.EventProvisionSucceeded, node.EventRelease,
+	},
+	node.StateQuarantined: {node.EventStartInspection, node.EventInspectionFailed},
+}
+
+func registerIn(t *testing.T, p *Postgres, id string, state node.State) {
+	t.Helper()
+	register(t, p, id)
+	for _, ev := range pathTo[state] {
+		tenant := ""
+		if ev == node.EventProvision {
+			tenant = "acme"
+		}
+		if _, err := p.ApplyEvent(context.Background(), id, ev, tenant); err != nil {
+			t.Fatalf("apply %s to %s: %v", ev, id, err)
 		}
 	}
 }
@@ -60,36 +112,52 @@ func registerAvailable(t *testing.T, p *Postgres, id string) {
 func TestRegisterAndGet(t *testing.T) {
 	p := openTestStore(t)
 	ctx := context.Background()
-	id := uniqueID(t, "n")
 
-	if err := p.Register(ctx, node.Register(id, "r7")); err != nil {
+	want := node.Node{ID: "n1", Rack: "r7", BMC: "https://10.0.0.7:8443", State: node.StateRacked}
+	if err := p.Register(ctx, node.Register(want.ID, want.Rack, want.BMC)); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	got, err := p.Get(ctx, id)
+	got, err := p.Get(ctx, "n1")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	want := node.Node{ID: id, Rack: "r7", State: node.StateRacked}
 	if got != want {
 		t.Fatalf("get = %+v, want %+v", got, want)
 	}
 }
 
-func TestRegisterDuplicateConflicts(t *testing.T) {
+func TestBMCRoundTripsThroughList(t *testing.T) {
 	p := openTestStore(t)
 	ctx := context.Background()
-	id := uniqueID(t, "n")
-	if err := p.Register(ctx, node.Register(id, "r1")); err != nil {
-		t.Fatalf("register: %v", err)
+	registerIn(t, p, "a", node.StateRacked)
+	registerIn(t, p, "b", node.StateAvailable)
+
+	nodes, err := p.List(ctx, "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
 	}
-	if err := p.Register(ctx, node.Register(id, "r1")); !errors.Is(err, ErrConflict) {
+	if len(nodes) != 2 {
+		t.Fatalf("list returned %d nodes, want 2", len(nodes))
+	}
+	for _, n := range nodes {
+		if n.BMC != testBMC(n.ID) {
+			t.Errorf("node %s bmc = %q, want %q", n.ID, n.BMC, testBMC(n.ID))
+		}
+	}
+}
+
+func TestRegisterDuplicateConflicts(t *testing.T) {
+	p := openTestStore(t)
+	register(t, p, "n1")
+	err := p.Register(context.Background(), node.Register("n1", "r1", testBMC("n1")))
+	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("second register: err = %v, want ErrConflict", err)
 	}
 }
 
 func TestGetMissingNode(t *testing.T) {
 	p := openTestStore(t)
-	if _, err := p.Get(context.Background(), uniqueID(t, "missing")); !errors.Is(err, ErrNotFound) {
+	if _, err := p.Get(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
@@ -97,8 +165,7 @@ func TestGetMissingNode(t *testing.T) {
 func TestApplyEventPersistsAndAudits(t *testing.T) {
 	p := openTestStore(t)
 	ctx := context.Background()
-	id := uniqueID(t, "n")
-	registerAvailable(t, p, id)
+	registerIn(t, p, "n1", node.StateAvailable)
 
 	for _, step := range []struct {
 		ev     node.Event
@@ -109,12 +176,12 @@ func TestApplyEventPersistsAndAudits(t *testing.T) {
 		{node.EventRelease, ""},
 		{node.EventWipeSucceeded, ""},
 	} {
-		if _, err := p.ApplyEvent(ctx, id, step.ev, step.tenant); err != nil {
+		if _, err := p.ApplyEvent(ctx, "n1", step.ev, step.tenant); err != nil {
 			t.Fatalf("apply %s: %v", step.ev, err)
 		}
 	}
 
-	got, err := p.Get(ctx, id)
+	got, err := p.Get(ctx, "n1")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -122,7 +189,7 @@ func TestApplyEventPersistsAndAudits(t *testing.T) {
 		t.Fatalf("node = %+v, want inspecting with no tenant", got)
 	}
 
-	events, err := p.Events(ctx, id)
+	events, err := p.Events(ctx, "n1")
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
@@ -138,14 +205,11 @@ func TestApplyEventPersistsAndAudits(t *testing.T) {
 func TestApplyEventInvalidTransitionChangesNothing(t *testing.T) {
 	p := openTestStore(t)
 	ctx := context.Background()
-	id := uniqueID(t, "n")
-	if err := p.Register(ctx, node.Register(id, "r1")); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	if _, err := p.ApplyEvent(ctx, id, node.EventRelease, ""); !errors.Is(err, node.ErrInvalidTransition) {
+	register(t, p, "n1")
+	if _, err := p.ApplyEvent(ctx, "n1", node.EventRelease, ""); !errors.Is(err, node.ErrInvalidTransition) {
 		t.Fatalf("err = %v, want ErrInvalidTransition", err)
 	}
-	events, err := p.Events(ctx, id)
+	events, err := p.Events(ctx, "n1")
 	if err != nil || len(events) != 0 {
 		t.Fatalf("events = %v, %v; want none", events, err)
 	}
@@ -153,7 +217,7 @@ func TestApplyEventInvalidTransitionChangesNothing(t *testing.T) {
 
 func TestApplyEventMissingNode(t *testing.T) {
 	p := openTestStore(t)
-	_, err := p.ApplyEvent(context.Background(), uniqueID(t, "missing"), node.EventStartInspection, "")
+	_, err := p.ApplyEvent(context.Background(), "missing", node.EventStartInspection, "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -162,15 +226,14 @@ func TestApplyEventMissingNode(t *testing.T) {
 func TestConcurrentProvisionOnlyOneWins(t *testing.T) {
 	p := openTestStore(t)
 	ctx := context.Background()
-	id := uniqueID(t, "n")
-	registerAvailable(t, p, id)
+	registerIn(t, p, "n1", node.StateAvailable)
 
 	const racers = 8
 	var wg sync.WaitGroup
 	errs := make([]error, racers)
 	for i := range racers {
 		wg.Go(func() {
-			_, errs[i] = p.ApplyEvent(ctx, id, node.EventProvision, fmt.Sprintf("tenant-%d", i))
+			_, errs[i] = p.ApplyEvent(ctx, "n1", node.EventProvision, fmt.Sprintf("tenant-%d", i))
 		})
 	}
 	wg.Wait()
@@ -191,25 +254,23 @@ func TestConcurrentProvisionOnlyOneWins(t *testing.T) {
 
 func TestListFiltersByState(t *testing.T) {
 	p := openTestStore(t)
-	ctx := context.Background()
-	racked, available := uniqueID(t, "racked"), uniqueID(t, "available")
-	if err := p.Register(ctx, node.Register(racked, "r1")); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-	registerAvailable(t, p, available)
+	registerIn(t, p, "racked", node.StateRacked)
+	registerIn(t, p, "available", node.StateAvailable)
 
-	nodes, err := p.List(ctx, node.StateAvailable)
+	nodes, err := p.List(context.Background(), node.StateAvailable)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	ids := map[string]bool{}
-	for _, n := range nodes {
-		if n.State != node.StateAvailable {
-			t.Errorf("List(available) returned %+v", n)
-		}
-		ids[n.ID] = true
+	if len(nodes) != 1 || nodes[0].ID != "available" {
+		t.Fatalf("List(available) = %+v, want only the available node", nodes)
 	}
-	if !ids[available] || ids[racked] {
-		t.Fatalf("List(available) ids = %v, want %s and not %s", ids, available, racked)
+}
+
+func TestLeaseColumnsMustBeSetTogether(t *testing.T) {
+	p := openTestStore(t)
+	register(t, p, "n1")
+	_, err := p.pool.Exec(context.Background(), `UPDATE nodes SET lease_owner = 'w1' WHERE id = 'n1'`)
+	if err == nil {
+		t.Fatal("setting lease_owner without lease_expires_at succeeded, want check violation")
 	}
 }

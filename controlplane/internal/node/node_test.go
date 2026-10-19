@@ -15,14 +15,14 @@ func mustApply(t *testing.T, n Node, ev Event, tenant string) Node {
 }
 
 func TestRegisterStartsRacked(t *testing.T) {
-	n := Register("gpu-001", "r1")
+	n := Register("gpu-001", "r1", "")
 	if n.State != StateRacked || n.Tenant != "" {
 		t.Fatalf("Register = %+v, want racked with no tenant", n)
 	}
 }
 
 func TestTenantLifecycle(t *testing.T) {
-	n := Register("gpu-001", "r1")
+	n := Register("gpu-001", "r1", "")
 	n = mustApply(t, n, EventStartInspection, "")
 	n = mustApply(t, n, EventInspectionPassed, "")
 	n = mustApply(t, n, EventProvision, "acme")
@@ -60,7 +60,7 @@ func TestApplyTenantRules(t *testing.T) {
 }
 
 func TestApplyInvalidTransitionLeavesNodeUnchanged(t *testing.T) {
-	n := Register("gpu-001", "r1")
+	n := Register("gpu-001", "r1", "")
 	got, err := n.Apply(EventRelease, "")
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("err = %v, want ErrInvalidTransition", err)

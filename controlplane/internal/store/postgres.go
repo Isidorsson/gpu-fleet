@@ -18,11 +18,6 @@ import (
 	"gpu-fleet/controlplane/internal/node"
 )
 
-var (
-	ErrNotFound = errors.New("node not found")
-	ErrConflict = errors.New("node already exists")
-)
-
 const pgUniqueViolation = "23505"
 
 //go:embed migrations/*.sql
@@ -44,7 +39,15 @@ type Postgres struct {
 }
 
 func Open(ctx context.Context, url string) (*Postgres, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("parse postgres url: %w", err)
+	}
+	return openPool(ctx, cfg)
+}
+
+func openPool(ctx context.Context, cfg *pgxpool.Config) (*Postgres, error) {
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open pool: %w", err)
 	}
@@ -76,8 +79,8 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 
 func (p *Postgres) Register(ctx context.Context, n node.Node) error {
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO nodes (id, rack, state, tenant) VALUES ($1, $2, $3, nullif($4, ''))`,
-		n.ID, n.Rack, string(n.State), n.Tenant)
+		`INSERT INTO nodes (id, rack, bmc, state, tenant) VALUES ($1, $2, $3, $4, nullif($5, ''))`,
+		n.ID, n.Rack, n.BMC, string(n.State), n.Tenant)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pgUniqueViolation {
 		return fmt.Errorf("%w: %s", ErrConflict, n.ID)
 	}
@@ -87,10 +90,13 @@ func (p *Postgres) Register(ctx context.Context, n node.Node) error {
 	return nil
 }
 
-const selectNode = `SELECT id, rack, state, coalesce(tenant, '') FROM nodes`
+const (
+	nodeColumns = `id, rack, bmc, state, coalesce(tenant, '')`
+	selectNode  = `SELECT ` + nodeColumns + ` FROM nodes`
+)
 
 func (p *Postgres) Get(ctx context.Context, id string) (node.Node, error) {
-	return getNode(ctx, p.pool, selectNode+` WHERE id = $1`, id)
+	return getOne(ctx, p.pool, selectNode+` WHERE id = $1`, id, scanNode)
 }
 
 // List returns all nodes, or only those in state when it is non-empty.
@@ -101,34 +107,6 @@ func (p *Postgres) List(ctx context.Context, state node.State) ([]node.Node, err
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
 	return pgx.CollectRows(rows, scanNode)
-}
-
-// ApplyEvent locks the node row for the whole transition so concurrent
-// events on one node are serialized and the audit log matches the state.
-func (p *Postgres) ApplyEvent(ctx context.Context, id string, ev node.Event, tenant string) (node.Node, error) {
-	var next node.Node
-	err := pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
-		cur, err := getNode(ctx, tx, selectNode+` WHERE id = $1 FOR UPDATE`, id)
-		if err != nil {
-			return err
-		}
-		if next, err = cur.Apply(ev, tenant); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE nodes SET state = $2, tenant = nullif($3, ''), updated_at = now() WHERE id = $1`,
-			id, string(next.State), next.Tenant); err != nil {
-			return fmt.Errorf("update node %s: %w", id, err)
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO node_events (node_id, from_state, event, to_state, tenant)
-			 VALUES ($1, $2, $3, $4, nullif($5, ''))`,
-			id, string(cur.State), string(ev), string(next.State), affectedTenant(cur, next)); err != nil {
-			return fmt.Errorf("insert event for %s: %w", id, err)
-		}
-		return nil
-	})
-	return next, err
 }
 
 func (p *Postgres) Events(ctx context.Context, id string) ([]EventRecord, error) {
@@ -150,33 +128,35 @@ func (p *Postgres) Events(ctx context.Context, id string) ([]EventRecord, error)
 	})
 }
 
-func affectedTenant(before, after node.Node) string {
-	if after.Tenant != "" {
-		return after.Tenant
-	}
-	return before.Tenant
-}
-
 type querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-func getNode(ctx context.Context, q querier, sql string, id string) (node.Node, error) {
+func getOne[T any](ctx context.Context, q querier, sql, id string, scan pgx.RowToFunc[T]) (T, error) {
+	var zero T
 	rows, err := q.Query(ctx, sql, id)
 	if err != nil {
-		return node.Node{}, fmt.Errorf("get node %s: %w", id, err)
+		return zero, fmt.Errorf("get node %s: %w", id, err)
 	}
-	n, err := pgx.CollectExactlyOneRow(rows, scanNode)
+	v, err := pgx.CollectExactlyOneRow(rows, scan)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return node.Node{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+		return zero, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
-	return n, err
+	if err != nil {
+		return zero, fmt.Errorf("scan node %s: %w", id, err)
+	}
+	return v, nil
+}
+
+// nodeDests lists scan targets for nodeColumns, in order.
+func nodeDests(n *node.Node, state *string) []any {
+	return []any{&n.ID, &n.Rack, &n.BMC, state, &n.Tenant}
 }
 
 func scanNode(row pgx.CollectableRow) (node.Node, error) {
 	var n node.Node
 	var state string
-	err := row.Scan(&n.ID, &n.Rack, &state, &n.Tenant)
+	err := row.Scan(nodeDests(&n, &state)...)
 	n.State = node.State(state)
 	return n, err
 }
