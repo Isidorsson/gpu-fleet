@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: controlplane
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+  # 9400 matches NVIDIA dcgm-exporter, so dashboards work against either.
+  - job_name: gpu-agent
+    static_configs:
+      - targets: ["host.docker.internal:9400"]

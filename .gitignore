@@ -1,0 +1,4 @@
+/agent/target/
+/controlplane/bin/
+*.exe
+.env
