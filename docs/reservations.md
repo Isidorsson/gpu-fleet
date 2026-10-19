@@ -27,7 +27,7 @@ any order. The result is node IDs sorted ascending. Same input, same output.
 |---|---|
 | `same_rack` | All nodes in one rack. Choose the rack with the fewest free nodes that still has `>= Count` (best fit). Ties: lowest `(pod, rack)`. |
 | `same_pod` | All nodes in one pod. Choose the pod with the fewest free nodes that still has `>= Count` (best fit). Ties: lowest pod. Inside the pod: if one rack fits, use the best-fit rack as for `same_rack`; otherwise take racks in ascending free count (ties: lowest rack), consuming each fully before the next, so large racks stay whole. |
-| `any` | If some pod fits, exactly as `same_pod`. Otherwise span pods in descending free count (ties: lowest pod), each pod consumed with the `same_pod` inner rule, using as few pods as possible. |
+| `any` | If some pod fits, exactly as `same_pod`. Otherwise span as few pods as possible: while no unused pod has `>=` the remaining count, consume the unused pod with the most free nodes fully (ties: lowest pod); then take the remainder from the best-fit unused pod, the one with the fewest free nodes that still has `>=` the remainder (ties: lowest pod). Each pod is consumed with the `same_pod` inner rule. Free counts 6, 3, 2 and count 8 give 6 + 2, leaving the 3 whole. |
 
 Within a chosen rack, nodes are taken in ascending ID order.
 
@@ -42,6 +42,11 @@ rack.
 ## Schema (in `00001_baseline.sql`; pre-launch, single baseline)
 
 - `nodes.pod text NOT NULL`.
+- `nodes.reservation_id text REFERENCES reservations`: the reservation the
+  node was provisioned for (`node.Node.Reservation`). Set by `StartNode`,
+  cleared to NULL by any other `provision` and, like `tenant`, by
+  `wipe_succeeded`, so it survives `release`, `provision_failed` and
+  quarantine. `CHECK (reservation_id IS NULL OR tenant IS NOT NULL)`.
 - `CREATE EXTENSION IF NOT EXISTS btree_gist;`
 - `reservations`: `id text PK` (`res-` + 12 random hex), `tenant text NOT NULL`,
   `node_count int NOT NULL CHECK (node_count BETWEEN 1 AND 64)`,
@@ -86,15 +91,29 @@ func (p *Postgres) CreateReservation(ctx context.Context, req reservation.Reques
 func (p *Postgres) GetReservation(ctx context.Context, id string) (reservation.Reservation, error)       // reservation.ErrNotFound
 func (p *Postgres) ListReservations(ctx context.Context, tenant string) ([]reservation.Reservation, error) // "" = all; newest first
 
-// CancelReservation at time now: scheduled -> cancelled and its node rows are
-// deleted. active/degraded -> ends_at and node row periods are truncated to
-// now (status unchanged; the reconciler ends it). ended/cancelled ->
-// reservation.ErrNotCancellable.
+// CancelReservation at time now: scheduled with no node held by it ->
+// cancelled and its node rows are deleted. active/degraded, or scheduled with
+// a node already provisioning/active for it (cancelled mid-start) -> ends_at
+// and node row periods are truncated to now (status unchanged; the reconciler
+// ends it). ended/cancelled -> reservation.ErrNotCancellable.
 func (p *Postgres) CancelReservation(ctx context.Context, id string, now time.Time) (reservation.Reservation, error)
 
 func (p *Postgres) DueToStart(ctx context.Context, now time.Time) ([]reservation.Reservation, error) // scheduled, starts_at <= now
+func (p *Postgres) Running(ctx context.Context, now time.Time) ([]reservation.Reservation, error)    // active|degraded, starts_at <= now < ends_at
 func (p *Postgres) DueToEnd(ctx context.Context, now time.Time) ([]reservation.Reservation, error)   // active|degraded, ends_at <= now
 func (p *Postgres) SetReservationStatus(ctx context.Context, id string, s reservation.Status) error
+
+// StartNode applies provision to nodeID with the reservation's tenant and sets
+// nodes.reservation_id to id, in one transaction holding the reservation row
+// lock, so it serializes with CancelReservation. reservation.ErrInvalid when
+// the reservation is ended or cancelled or has no row for nodeID covering
+// now; node.ErrInvalidTransition when the node is not available.
+func (p *Postgres) StartNode(ctx context.Context, id, nodeID string, now time.Time) (node.Node, error)
+
+// DropNode deletes the reservation's row for nodeID, so a node that left and
+// could not be replaced no longer blocks capacity. Deleting a missing row is
+// not an error.
+func (p *Postgres) DropNode(ctx context.Context, id, nodeID string) error
 
 // ReplaceNode swaps oldNodeID for one free candidate for the reservation's
 // remaining window [max(now, start), end), restricted to the pod (same_pod)
@@ -111,22 +130,49 @@ One leader at a time: it holds `pg_try_advisory_lock(<named constant>)` on a
 dedicated connection; non-leaders retry every tick. Each tick (default 5s),
 with an injected clock:
 
-**Start** every reservation from `DueToStart(now)`. For each of its nodes:
-- `quarantined`: `ReplaceNode`. On `*CapacityError` the node is dropped, the
-  reservation will be `degraded`, and `Metrics.Degraded()` is called once.
-- `available`: apply `provision` with the reservation's tenant (operator-style
-  `ApplyEvent`; workers pick it up).
-- `provisioning`/`active` with the same tenant: already started, skip.
-- anything else (`racked`, `inspecting`, `wiping`, or held by another
-  tenant): not ready; leave the reservation `scheduled` and retry next tick.
-
-When every remaining node has been provisioned, set status `active` (or
-`degraded` if any node was dropped).
+A node is **held by** reservation R when it is `provisioning`/`active` and
+its `Reservation` is R. Tenant equality is not enough: back-to-back
+reservations of one tenant share nodes.
 
 **End** every reservation from `DueToEnd(now)`: apply `release` to each of
-its nodes that is `active` with its tenant. A node still `provisioning`
-waits for the next tick. When none of its nodes is `provisioning`/`active`
-for its tenant any more, set status `ended`.
+its nodes that is held by it and `active`. A node still `provisioning` waits
+for the next tick. When none of its nodes is held by it any more, set status
+`ended`.
+
+**Check** every reservation from `Running(now)`. For each of its nodes:
+- held by it: healthy.
+- lost, i.e. `quarantined`, or `wiping` with `Reservation` R (provisioning
+  failed, or it was released or faulted and is being wiped): if the
+  reservation is `active`, set it `degraded` and call `Metrics.Degraded()`
+  (once, after the status is stored). Then `ReplaceNode` for the remaining
+  window and treat the replacement as below; on `*CapacityError`,
+  `DropNode`.
+- `available` (a replacement, or a lost node that already came back): apply
+  `StartNode`.
+- anything else (a replacement still `racked`, `inspecting` or `wiping`):
+  not ready; retry next tick.
+
+A `degraded` reservation stays `degraded` for the rest of its window.
+
+**Start** every reservation from `DueToStart(now)`. If its window has
+already passed (it never fully started, or it was cancelled mid-start), wind
+it down as in End and set `ended` once no node is held by it. Otherwise, for
+each of its nodes:
+- held by it: already started, skip.
+- `quarantined`: `ReplaceNode`, then treat the replacement as below. On
+  `*CapacityError` the node is unreplaceable for now; it is retried on later
+  ticks while other nodes keep the reservation `scheduled`.
+- `available`: apply `StartNode` (workers pick the provisioning up).
+- anything else (`racked`, `inspecting`, `wiping`, or held by another
+  reservation, even of the same tenant): not ready; leave the reservation
+  `scheduled` and retry next tick.
+
+When no node is pending, `DropNode` each unreplaceable node, then set status
+`active`, or `degraded` if it now has fewer nodes than its count (then
+`Metrics.Degraded()` once, after the status is stored).
+
+Each tick runs End, then Check, then Start, so a node released by one
+reservation is seen as free by the next.
 
 Every step is idempotent: a crashed tick is simply redone by the next one.
 

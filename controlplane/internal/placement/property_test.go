@@ -181,7 +181,7 @@ func (pc propertyCase) checkInsidePod(pod string, used stats) {
 		pc.checkSingleBestFit(used, fit)
 		return
 	}
-	checkOrderedConsumption(pc, podRacks, used.racks, false)
+	checkOrderedConsumption(pc, podRacks, used.racks)
 }
 
 func (pc propertyCase) checkSingleBestFit(used stats, fit int) {
@@ -205,14 +205,42 @@ func (pc propertyCase) checkAny(used stats) {
 		pc.checkSamePod(used)
 		return
 	}
-	checkOrderedConsumption(pc, pc.s.pods, used.pods, true)
+	pc.checkSpan(used)
 }
 
-// checkOrderedConsumption verifies the multi-unit rules: at most one rack (or
-// pod) is partly used, and the units used are the smallest ones when
-// descending is false (racks inside a pod) or the largest when it is true
-// (pods in an any span).
-func checkOrderedConsumption[K comparable](pc propertyCase, free, used map[K]int, descending bool) {
+// checkSpan verifies an any span by pod sizes: all but one used pod are the
+// largest pods, consumed fully, and the last is the best fit for the rest.
+func (pc propertyCase) checkSpan(used stats) {
+	pc.t.Helper()
+	sizes := slices.SortedFunc(maps.Values(pc.s.pods), descending)
+	full := sizes[:len(used.pods)-1]
+	remainder := pc.req.Count
+	for _, n := range full {
+		remainder -= n
+	}
+	want := slices.SortedFunc(slices.Values(append(slices.Clone(full), smallestFit(sizes[len(full):], remainder))), descending)
+	var got []int
+	partial := 0
+	for pod, u := range used.pods {
+		got = append(got, pc.s.pods[pod])
+		if u < pc.s.pods[pod] {
+			partial++
+			if u != remainder {
+				pc.t.Fatalf("%s: pod %s partly used for %d, remainder is %d", pc.desc, pod, u, remainder)
+			}
+		}
+	}
+	slices.SortFunc(got, descending)
+	if partial > 1 || !slices.Equal(got, want) {
+		pc.t.Fatalf("%s: used pods of sizes %v (%d partial), want %v", pc.desc, got, partial, want)
+	}
+}
+
+func descending(a, b int) int { return b - a }
+
+// checkOrderedConsumption verifies the multi-rack rule inside a pod: at most
+// one rack is partly used, and the racks used are the smallest ones.
+func checkOrderedConsumption[K comparable](pc propertyCase, free, used map[K]int) {
 	pc.t.Helper()
 	partial := 0
 	usedSizes, unusedSizes := []int{}, []int{}
@@ -233,11 +261,7 @@ func checkOrderedConsumption[K comparable](pc propertyCase, free, used map[K]int
 	if len(usedSizes) == 0 || len(unusedSizes) == 0 {
 		return
 	}
-	lo, hi := slices.Min(usedSizes), slices.Max(usedSizes)
-	if descending && lo < slices.Max(unusedSizes) {
-		pc.t.Fatalf("%s: used a unit of %d free while one of %d was left", pc.desc, lo, slices.Max(unusedSizes))
-	}
-	if !descending && hi > slices.Min(unusedSizes) {
+	if hi := slices.Max(usedSizes); hi > slices.Min(unusedSizes) {
 		pc.t.Fatalf("%s: used a unit of %d free while one of %d was left", pc.desc, hi, slices.Min(unusedSizes))
 	}
 }

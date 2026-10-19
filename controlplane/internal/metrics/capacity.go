@@ -156,7 +156,7 @@ func newReservationMetrics() *reservationMetrics {
 		}, []string{labelPolicy}),
 		degraded: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "reservation_degraded_total",
-			Help: "Reservations that started with fewer nodes than requested.",
+			Help: "Reservations that became degraded, at start or while running.",
 		}),
 	}
 	for _, p := range placementPolicies {

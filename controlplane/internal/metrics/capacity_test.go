@@ -19,7 +19,7 @@ const (
 	freeNodesHelp    = "Nodes free for the next minute, by pod, counted at scrape time."
 	reservationsHelp = "Reservations by status, counted at scrape time."
 	failuresHelp     = "Requests rejected for insufficient capacity, by policy."
-	degradedHelp     = "Reservations that started with fewer nodes than requested."
+	degradedHelp     = "Reservations that became degraded, at start or while running."
 )
 
 var testNow = time.Date(2026, time.March, 1, 12, 0, 0, 0, time.UTC)

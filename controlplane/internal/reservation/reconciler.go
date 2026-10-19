@@ -23,9 +23,14 @@ var ErrInvalidConfig = errors.New("invalid reservation reconciler config")
 // Store is the part of the reservation store the reconciler uses.
 type Store interface {
 	DueToStart(ctx context.Context, now time.Time) ([]Reservation, error)
+	Running(ctx context.Context, now time.Time) ([]Reservation, error)
 	DueToEnd(ctx context.Context, now time.Time) ([]Reservation, error)
 	SetReservationStatus(ctx context.Context, id string, s Status) error
 	ReplaceNode(ctx context.Context, id, oldNodeID string, now time.Time, place placement.Placer) (string, error)
+	// StartNode provisions a node for the reservation and records the
+	// reservation as its holder.
+	StartNode(ctx context.Context, id, nodeID string, now time.Time) (node.Node, error)
+	DropNode(ctx context.Context, id, nodeID string) error
 }
 
 // Nodes reads nodes and applies operator-style lifecycle events to them;
@@ -122,8 +127,9 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 	// Ending first frees a tenant's nodes before a back-to-back reservation
 	// for the same tenant looks at them.
 	endErr := r.endDue(ctx, now)
+	checkErr := r.checkRunning(ctx, now)
 	startErr := r.startDue(ctx, now)
-	return errors.Join(endErr, startErr)
+	return errors.Join(endErr, checkErr, startErr)
 }
 
 // Run ticks until ctx is done. Failures are logged and retried on the next
@@ -146,6 +152,14 @@ func (r *Reconciler) startDue(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("list reservations due to start: %w", err)
 	}
 	return forEach(ctx, due, "start", func(res Reservation) error { return r.start(ctx, res, now) })
+}
+
+func (r *Reconciler) checkRunning(ctx context.Context, now time.Time) error {
+	running, err := r.store.Running(ctx, now)
+	if err != nil {
+		return fmt.Errorf("list running reservations: %w", err)
+	}
+	return forEach(ctx, running, "check", func(res Reservation) error { return r.check(ctx, res, now) })
 }
 
 func (r *Reconciler) endDue(ctx context.Context, now time.Time) error {

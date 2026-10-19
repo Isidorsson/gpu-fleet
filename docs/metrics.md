@@ -85,7 +85,7 @@ Same `/metrics` endpoint. See [reservations.md](reservations.md).
 | `capacity_free_nodes` | gauge | `pod` | computed at scrape time from `FreeCandidates(now, now+1m)`; one series per pod that has any node |
 | `reservations` | gauge | `status` | computed at scrape time with `CountReservationsByStatus`; all 5 statuses always present |
 | `placement_failures_total` | counter | `policy` | requests rejected for insufficient capacity; all 3 policies pre-initialized to 0 |
-| `reservation_degraded_total` | counter | | reservations that started with fewer nodes than requested |
+| `reservation_degraded_total` | counter | | reservations that became degraded: started with fewer nodes than requested, or lost a node while running |
 
 ## Scrape config
 

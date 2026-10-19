@@ -49,6 +49,46 @@ func TestQuarantineKeepsTenantUntilWiped(t *testing.T) {
 	}
 }
 
+func TestProvisionForRecordsReservationUntilWiped(t *testing.T) {
+	n := Node{ID: "gpu-001", State: StateAvailable}
+	n, err := n.ProvisionFor("acme", "res-1")
+	if err != nil {
+		t.Fatalf("ProvisionFor: %v", err)
+	}
+	if n.State != StateProvisioning || n.Tenant != "acme" || n.Reservation != "res-1" {
+		t.Fatalf("after ProvisionFor = %+v, want provisioning for acme under res-1", n)
+	}
+	for _, ev := range []Event{EventProvisionFailed, EventWipeFailed, EventRepaired} {
+		n = mustApply(t, n, ev, "")
+		if n.Reservation != "res-1" {
+			t.Fatalf("after %s = %+v, want res-1 kept until wiped", ev, n)
+		}
+	}
+	n = mustApply(t, n, EventWipeSucceeded, "")
+	if n.Reservation != "" || n.Tenant != "" {
+		t.Fatalf("after wipe = %+v, want no reservation and no tenant", n)
+	}
+}
+
+func TestProvisionWithoutReservationClearsIt(t *testing.T) {
+	n := Node{ID: "gpu-001", State: StateAvailable, Reservation: "stale"}
+	n = mustApply(t, n, EventProvision, "acme")
+	if n.Reservation != "" {
+		t.Fatalf("operator provision = %+v, want no reservation", n)
+	}
+}
+
+func TestProvisionForFollowsTheLifecycle(t *testing.T) {
+	active := Node{ID: "gpu-001", State: StateActive, Tenant: "acme"}
+	if _, err := active.ProvisionFor("acme", "res-1"); !errors.Is(err, ErrInvalidTransition) {
+		t.Errorf("ProvisionFor on active: err = %v, want ErrInvalidTransition", err)
+	}
+	available := Node{ID: "gpu-001", State: StateAvailable}
+	if _, err := available.ProvisionFor("", "res-1"); !errors.Is(err, ErrTenantRequired) {
+		t.Errorf("ProvisionFor without tenant: err = %v, want ErrTenantRequired", err)
+	}
+}
+
 func TestApplyTenantRules(t *testing.T) {
 	available := Node{ID: "gpu-001", State: StateAvailable}
 	if _, err := available.Apply(EventProvision, ""); !errors.Is(err, ErrTenantRequired) {

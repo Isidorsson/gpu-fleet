@@ -156,10 +156,22 @@ func TestPlaceAny(t *testing.T) {
 			want:  sorted(idsOf("p2", "r1", 1, 5), idsOf("p3", "r1", 1, 3)),
 		},
 		{
-			name:  "remainder comes from next largest pod even if a smaller one fits exactly",
+			name:  "remainder comes from the best-fit pod, leaving larger pods whole",
 			count: 8,
 			free:  fleet(gen("p1", "r1", 6), gen("p2", "r1", 3), gen("p3", "r1", 2)),
-			want:  sorted(idsOf("p1", "r1", 1, 6), idsOf("p2", "r1", 1, 2)),
+			want:  sorted(idsOf("p1", "r1", 1, 6), idsOf("p3", "r1", 1, 2)),
+		},
+		{
+			name:  "remainder takes the smallest pod that still fits it",
+			count: 8,
+			free:  fleet(gen("p1", "r1", 5), gen("p2", "r1", 4), gen("p3", "r1", 3), gen("p4", "r1", 2)),
+			want:  sorted(idsOf("p1", "r1", 1, 5), idsOf("p3", "r1", 1, 3)),
+		},
+		{
+			name:  "best-fit ties go to lowest pod",
+			count: 7,
+			free:  fleet(gen("p1", "r1", 5), gen("p3", "r1", 2), gen("p2", "r1", 2)),
+			want:  sorted(idsOf("p1", "r1", 1, 5), idsOf("p2", "r1", 1, 2)),
 		},
 		{
 			name:  "pod ties go to lowest pod",
@@ -171,7 +183,7 @@ func TestPlaceAny(t *testing.T) {
 			name:  "uses as few pods as possible",
 			count: 9,
 			free:  fleet(gen("p1", "r1", 4), gen("p2", "r1", 4), gen("p3", "r1", 4), gen("p4", "r1", 1)),
-			want:  sorted(idsOf("p1", "r1", 1, 4), idsOf("p2", "r1", 1, 4), idsOf("p3", "r1", 1, 1)),
+			want:  sorted(idsOf("p1", "r1", 1, 4), idsOf("p2", "r1", 1, 4), idsOf("p4", "r1", 1, 1)),
 		},
 		{
 			name:  "partial pod with a fitting rack uses best-fit rack",

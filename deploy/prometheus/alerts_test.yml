@@ -183,7 +183,7 @@ tests:
               job: controlplane
               instance: host.docker.internal:8080
             exp_annotations:
-              summary: "A reservation started with fewer nodes than requested"
+              summary: "A reservation is running with fewer nodes than requested"
               description: "Degraded reservation starts in the last 15m: 1. A quarantined node could not be replaced within the reservation's placement policy."
       - eval_time: 15m
         alertname: ReservationDegraded
@@ -193,7 +193,7 @@ tests:
               job: controlplane
               instance: host.docker.internal:8080
             exp_annotations:
-              summary: "A reservation started with fewer nodes than requested"
+              summary: "A reservation is running with fewer nodes than requested"
               description: "Degraded reservation starts in the last 15m: 1. A quarantined node could not be replaced within the reservation's placement policy."
       - eval_time: 40m
         alertname: ReservationDegraded

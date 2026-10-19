@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -64,20 +65,24 @@ type replaceCall struct {
 // store. Errors are queued and consumed one per call.
 type fakeStore struct {
 	mu           sync.Mutex
+	nodes        *fakeNodes
 	order        []string
 	byID         map[string]*Reservation
 	replacements map[string]string
 	replaceErrs  map[string]error
 	replaceCalls []replaceCall
+	drops        []string
 	statusLog    []string
 	statusErrs   []error
 	dueStartErrs []error
 	dueStarts    int
+	runs         int
 	dueEnds      int
 }
 
-func newFakeStore() *fakeStore {
+func newFakeStore(nodes *fakeNodes) *fakeStore {
 	return &fakeStore{
+		nodes:        nodes,
 		byID:         map[string]*Reservation{},
 		replacements: map[string]string{},
 		replaceErrs:  map[string]error{},
@@ -118,6 +123,16 @@ func (s *fakeStore) DueToStart(_ context.Context, now time.Time) ([]Reservation,
 		return nil, err
 	}
 	return s.due(func(r Reservation) bool { return r.Status == StatusScheduled && !r.StartsAt.After(now) }), nil
+}
+
+func (s *fakeStore) Running(_ context.Context, now time.Time) ([]Reservation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs++
+	return s.due(func(r Reservation) bool {
+		live := r.Status == StatusActive || r.Status == StatusDegraded
+		return live && !r.StartsAt.After(now) && r.EndsAt.After(now)
+	}), nil
 }
 
 func (s *fakeStore) DueToEnd(_ context.Context, now time.Time) ([]Reservation, error) {
@@ -165,6 +180,29 @@ func (s *fakeStore) ReplaceNode(_ context.Context, id, oldNodeID string, now tim
 	return newID, nil
 }
 
+// StartNode checks what the real store checks, then provisions through the
+// fake nodes so the event shows up in their log.
+func (s *fakeStore) StartNode(_ context.Context, id, nodeID string, now time.Time) (node.Node, error) {
+	s.mu.Lock()
+	res := *s.byID[id]
+	s.mu.Unlock()
+	over := res.Status == StatusEnded || res.Status == StatusCancelled
+	inWindow := !res.StartsAt.After(now) && res.EndsAt.After(now)
+	if over || !inWindow || !slices.Contains(res.NodeIDs, nodeID) {
+		return node.Node{}, fmt.Errorf("%w: %s cannot start %s", ErrInvalid, id, nodeID)
+	}
+	return s.nodes.startFor(nodeID, res)
+}
+
+func (s *fakeStore) DropNode(_ context.Context, id, nodeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := s.byID[id]
+	res.NodeIDs = slices.DeleteFunc(res.NodeIDs, func(n string) bool { return n == nodeID })
+	s.drops = append(s.drops, nodeID)
+	return nil
+}
+
 type appliedEvent struct {
 	ID     string
 	Event  node.Event
@@ -186,6 +224,13 @@ func (f *fakeNodes) set(id string, st node.State, tenant string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nodes[id] = node.Node{ID: id, Pod: "p1", Rack: "r1", State: st, Tenant: tenant}
+}
+
+// hold puts id in st for testTenant, held by reservation resID.
+func (f *fakeNodes) hold(id string, st node.State, resID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nodes[id] = node.Node{ID: id, Pod: "p1", Rack: "r1", State: st, Tenant: testTenant, Reservation: resID}
 }
 
 func (f *fakeNodes) get(id string) node.Node {
@@ -235,6 +280,26 @@ func (f *fakeNodes) ApplyEvent(_ context.Context, id string, ev node.Event, tena
 	}
 	f.nodes[id] = next
 	f.applied = append(f.applied, appliedEvent{ID: id, Event: ev, Tenant: tenant})
+	return next, nil
+}
+
+func (f *fakeNodes) startFor(id string, res Reservation) (node.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if q := f.applyErrs[id]; len(q) > 0 {
+		f.applyErrs[id] = q[1:]
+		return node.Node{}, q[0]
+	}
+	cur, ok := f.nodes[id]
+	if !ok {
+		return node.Node{}, fmt.Errorf("node %s: %w", id, errNoSuchNode)
+	}
+	next, err := cur.ProvisionFor(res.Tenant, res.ID)
+	if err != nil {
+		return node.Node{}, err
+	}
+	f.nodes[id] = next
+	f.applied = append(f.applied, appliedEvent{ID: id, Event: node.EventProvision, Tenant: res.Tenant})
 	return next, nil
 }
 
@@ -294,10 +359,11 @@ func testPlacer(placement.Request, []placement.Candidate) ([]string, error) {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	nodes := newFakeNodes()
 	h := &harness{
 		clock:   &fakeClock{now: testStart},
-		store:   newFakeStore(),
-		nodes:   newFakeNodes(),
+		store:   newFakeStore(nodes),
+		nodes:   nodes,
 		leader:  &fakeLeader{leader: true},
 		metrics: &fakeMetrics{},
 		logs:    &bytes.Buffer{},

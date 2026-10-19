@@ -10,14 +10,16 @@ import (
 // still be on the node's disks, so it survives quarantine and is only cleared
 // by a successful wipe. BMC is the base URL of the node's BMC; see
 // docs/bmc-protocol.md. Pod is the InfiniBand scalable unit the node's rack
-// belongs to; see docs/reservations.md.
+// belongs to; see docs/reservations.md. Reservation is the reservation the
+// node was provisioned for, if any; it is kept and cleared like Tenant.
 type Node struct {
-	ID     string
-	Pod    string
-	Rack   string
-	BMC    string
-	State  State
-	Tenant string
+	ID          string
+	Pod         string
+	Rack        string
+	BMC         string
+	State       State
+	Tenant      string
+	Reservation string
 }
 
 // Spec describes a node being registered.
@@ -73,10 +75,21 @@ func (n Node) Apply(ev Event, tenant string) (Node, error) {
 	next.State = to
 	switch ev {
 	case EventProvision:
-		next.Tenant = tenant
+		next.Tenant, next.Reservation = tenant, ""
 	case EventWipeSucceeded:
-		next.Tenant = ""
+		next.Tenant, next.Reservation = "", ""
 	}
+	return next, nil
+}
+
+// ProvisionFor provisions n for tenant on behalf of a reservation, which then
+// holds the node until a successful wipe.
+func (n Node) ProvisionFor(tenant, reservation string) (Node, error) {
+	next, err := n.Apply(EventProvision, tenant)
+	if err != nil {
+		return n, err
+	}
+	next.Reservation = reservation
 	return next, nil
 }
 

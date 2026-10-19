@@ -384,7 +384,7 @@
       "id": 18,
       "type": "stat",
       "title": "Degraded reservations (24h)",
-      "description": "Reservations that started with fewer nodes than requested, over the last 24 hours.",
+      "description": "Reservations that became degraded, at start or while running, over the last 24 hours.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 8, "w": 4, "x": 20, "y": 10 },
       "fieldConfig": {

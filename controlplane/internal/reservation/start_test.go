@@ -23,6 +23,7 @@ func TestStartProvisionsAvailableNodesWithTenant(t *testing.T) {
 	assertEqual(t, "status", h.status("res-1"), StatusActive)
 	assertEqual(t, "n1 state", h.nodes.get("n1").State, node.StateProvisioning)
 	assertEqual(t, "n1 tenant", h.nodes.get("n1").Tenant, testTenant)
+	assertEqual(t, "n1 holder", h.nodes.get("n1").Reservation, "res-1")
 	assertEqual(t, "degraded count", h.metrics.degradedCount(), 0)
 }
 
@@ -139,6 +140,8 @@ func TestStartDegradesWhenNoReplacementFits(t *testing.T) {
 	assertEqual(t, "status", h.status("res-1"), StatusDegraded)
 	assertEqual(t, "degraded count", h.metrics.degradedCount(), 1)
 	assertEqual(t, "quarantined node untouched", h.nodes.get("n1").State, node.StateQuarantined)
+	assertEqual(t, "dropped", strings.Join(h.store.drops, ","), "n1")
+	assertEqual(t, "nodes left", strings.Join(h.store.get("res-1").NodeIDs, ","), "n2,n3")
 
 	h.tick(t)
 	assertEqual(t, "degraded count after another tick", h.metrics.degradedCount(), 1)
@@ -201,8 +204,8 @@ func TestDegradedNotCountedUntilTheStatusIsStored(t *testing.T) {
 func TestStartSkipsNodesThatAreAlreadyStarted(t *testing.T) {
 	h := newHarness(t)
 	h.reserve("res-1", StatusScheduled, "n1", "n2", "n3")
-	h.nodes.set("n1", node.StateProvisioning, testTenant)
-	h.nodes.set("n2", node.StateActive, testTenant)
+	h.nodes.hold("n1", node.StateProvisioning, "res-1")
+	h.nodes.hold("n2", node.StateActive, "res-1")
 	h.nodes.set("n3", node.StateAvailable, "")
 
 	h.tick(t)
@@ -310,4 +313,62 @@ func TestStartFiresWhenTheClockReachesStartsAt(t *testing.T) {
 	}
 	h.tick(t)
 	assertEqual(t, "status at start", h.status("res-1"), StatusActive)
+}
+
+func TestStartDoesNotCountANodeHeldByTheTenantsPreviousReservation(t *testing.T) {
+	h := newHarness(t)
+	h.store.add(Reservation{
+		ID: "res-0", Tenant: testTenant, Count: 1, Policy: "any", Status: StatusActive, NodeIDs: []string{"n1"},
+		StartsAt: testStart.Add(-time.Hour), EndsAt: testStart,
+	})
+	h.reserve("res-1", StatusScheduled, "n1")
+	h.nodes.hold("n1", node.StateProvisioning, "res-0")
+
+	h.tick(t)
+	assertEqual(t, "status while res-0 still provisions n1", h.status("res-1"), StatusScheduled)
+
+	h.nodes.hold("n1", node.StateActive, "res-0")
+	h.tick(t)
+	assertEvents(t, h, released("n1"))
+	assertEqual(t, "previous reservation", h.status("res-0"), StatusEnded)
+	assertEqual(t, "status while n1 wipes", h.status("res-1"), StatusScheduled)
+}
+
+func TestStartDropsUnreplaceableNodesOnlyOnceTheRestHaveStarted(t *testing.T) {
+	h := newHarness(t)
+	h.reserve("res-1", StatusScheduled, "n1", "n2")
+	h.nodes.set("n1", node.StateQuarantined, "")
+	h.nodes.set("n2", node.StateRacked, "")
+
+	h.tick(t)
+	assertEqual(t, "drops while waiting", len(h.store.drops), 0)
+
+	h.nodes.set("n2", node.StateAvailable, "")
+	h.tick(t)
+
+	assertEqual(t, "dropped", strings.Join(h.store.drops, ","), "n1")
+	assertEqual(t, "status", h.status("res-1"), StatusDegraded)
+}
+
+func TestStartWindsDownAReservationCancelledMidStart(t *testing.T) {
+	h := newHarness(t)
+	h.store.add(Reservation{
+		ID: "res-1", Tenant: testTenant, Count: 3, Policy: "any", Status: StatusScheduled,
+		NodeIDs:  []string{"n1", "n2", "n3"},
+		StartsAt: testStart.Add(-time.Minute), EndsAt: testStart,
+	})
+	h.nodes.hold("n1", node.StateActive, "res-1")
+	h.nodes.set("n2", node.StateAvailable, "")
+	h.nodes.hold("n3", node.StateProvisioning, "res-1")
+
+	h.tick(t)
+	assertEvents(t, h, released("n1"))
+	assertEqual(t, "status while n3 provisions", h.status("res-1"), StatusScheduled)
+
+	h.nodes.hold("n3", node.StateActive, "res-1")
+	h.tick(t)
+
+	assertEvents(t, h, released("n1"), released("n3"))
+	assertEqual(t, "unstarted node untouched", h.nodes.get("n2").State, node.StateAvailable)
+	assertEqual(t, "status", h.status("res-1"), StatusEnded)
 }

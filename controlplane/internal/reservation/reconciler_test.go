@@ -23,6 +23,7 @@ func TestTickDoesNothingWhenNotLeader(t *testing.T) {
 	assertEvents(t, h)
 	assertEqual(t, "due-to-start queries", h.store.dueStarts, 0)
 	assertEqual(t, "due-to-end queries", h.store.dueEnds, 0)
+	assertEqual(t, "running queries", h.store.runs, 0)
 	assertEqual(t, "leader checks", h.leader.calls, 1)
 }
 
@@ -168,7 +169,7 @@ func TestNewReconcilerDefaultsOptionalDeps(t *testing.T) {
 	}
 	now := time.Now()
 	h.store.add(Reservation{
-		ID: "res-1", Tenant: testTenant, Status: StatusScheduled, NodeIDs: []string{"n1", "n2"},
+		ID: "res-1", Tenant: testTenant, Count: 2, Status: StatusScheduled, NodeIDs: []string{"n1", "n2"},
 		StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour),
 	})
 	h.nodes.set("n1", node.StateQuarantined, "")

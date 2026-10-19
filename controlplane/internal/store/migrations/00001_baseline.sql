@@ -12,6 +12,9 @@ CREATE TABLE nodes (
                          'racked', 'inspecting', 'available', 'provisioning',
                          'active', 'wiping', 'quarantined')),
     tenant           text,
+    -- The reservation the node was provisioned for. Kept, like tenant, until
+    -- a successful wipe; the foreign key is added with reservations below.
+    reservation_id   text,
     lease_owner      text,
     lease_expires_at timestamptz,
     updated_at       timestamptz NOT NULL DEFAULT now(),
@@ -21,6 +24,7 @@ CREATE TABLE nodes (
     -- Defense in depth for node.Apply: a node being provisioned or in use
     -- always has an owner.
     CHECK (state NOT IN ('provisioning', 'active') OR tenant IS NOT NULL),
+    CHECK (reservation_id IS NULL OR tenant IS NOT NULL),
     CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL))
 );
 
@@ -61,6 +65,9 @@ CREATE INDEX reservations_due_end_idx ON reservations (upper(period))
     WHERE status IN ('active', 'degraded');
 
 CREATE INDEX reservations_tenant_idx ON reservations (tenant, created_at DESC);
+
+ALTER TABLE nodes ADD FOREIGN KEY (reservation_id) REFERENCES reservations (id);
+CREATE INDEX nodes_reservation_idx ON nodes (reservation_id) WHERE reservation_id IS NOT NULL;
 
 -- A row's period is the span the reservation holds that node. It is shorter
 -- than the reservation's own when the node replaced a failed one. The

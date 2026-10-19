@@ -52,5 +52,5 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "A reservation started with fewer nodes than requested"
+          summary: "A reservation is running with fewer nodes than requested"
           description: 'Degraded reservation starts in the last 15m: {{ $value | printf "%.0f" }}. A quarantined node could not be replaced within the reservation''s placement policy.'

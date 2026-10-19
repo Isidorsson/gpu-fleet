@@ -14,8 +14,8 @@ import (
 func TestEndReleasesActiveNodesAndEnds(t *testing.T) {
 	h := newHarness(t)
 	h.reserve("res-1", StatusActive, "n1", "n2")
-	h.nodes.set("n1", node.StateActive, testTenant)
-	h.nodes.set("n2", node.StateActive, testTenant)
+	h.nodes.hold("n1", node.StateActive, "res-1")
+	h.nodes.hold("n2", node.StateActive, "res-1")
 	h.expire()
 
 	h.tick(t)
@@ -28,7 +28,7 @@ func TestEndReleasesActiveNodesAndEnds(t *testing.T) {
 func TestEndIgnoresReservationsThatAreNotDue(t *testing.T) {
 	h := newHarness(t)
 	h.reserve("res-1", StatusActive, "n1")
-	h.nodes.set("n1", node.StateActive, testTenant)
+	h.nodes.hold("n1", node.StateActive, "res-1")
 
 	h.tick(t)
 
@@ -39,8 +39,8 @@ func TestEndIgnoresReservationsThatAreNotDue(t *testing.T) {
 func TestEndWaitsForProvisioningNodes(t *testing.T) {
 	h := newHarness(t)
 	h.reserve("res-1", StatusActive, "n1", "n2")
-	h.nodes.set("n1", node.StateActive, testTenant)
-	h.nodes.set("n2", node.StateProvisioning, testTenant)
+	h.nodes.hold("n1", node.StateActive, "res-1")
+	h.nodes.hold("n2", node.StateProvisioning, "res-1")
 	h.expire()
 
 	h.tick(t)
@@ -51,32 +51,34 @@ func TestEndWaitsForProvisioningNodes(t *testing.T) {
 	assertEvents(t, h, released("n1"))
 	assertEqual(t, "status still waiting", h.status("res-1"), StatusActive)
 
-	h.nodes.set("n2", node.StateActive, testTenant)
+	h.nodes.hold("n2", node.StateActive, "res-1")
 	h.tick(t)
 
 	assertEvents(t, h, released("n1"), released("n2"))
 	assertEqual(t, "status", h.status("res-1"), StatusEnded)
 }
 
-func TestEndLeavesOtherTenantsAndQuarantinedNodesAlone(t *testing.T) {
+func TestEndLeavesNodesItDoesNotHoldAlone(t *testing.T) {
 	h := newHarness(t)
-	h.reserve("res-1", StatusDegraded, "n1", "n2", "n3")
+	h.reserve("res-1", StatusDegraded, "n1", "n2", "n3", "n4")
 	h.nodes.set("n1", node.StateActive, otherTenant)
-	h.nodes.set("n2", node.StateQuarantined, testTenant)
-	h.nodes.set("n3", node.StateActive, testTenant)
+	h.nodes.hold("n2", node.StateQuarantined, "res-1")
+	h.nodes.hold("n3", node.StateActive, "res-1")
+	h.nodes.hold("n4", node.StateActive, "res-0")
 	h.expire()
 
 	h.tick(t)
 
 	assertEvents(t, h, released("n3"))
 	assertEqual(t, "other tenant's node", h.nodes.get("n1").State, node.StateActive)
+	assertEqual(t, "same tenant's other reservation", h.nodes.get("n4").State, node.StateActive)
 	assertEqual(t, "status", h.status("res-1"), StatusEnded)
 }
 
 func TestEndIsIdempotentAfterAFailedStatusWrite(t *testing.T) {
 	h := newHarness(t)
 	h.reserve("res-1", StatusActive, "n1")
-	h.nodes.set("n1", node.StateActive, testTenant)
+	h.nodes.hold("n1", node.StateActive, "res-1")
 	h.expire()
 	h.store.statusErrs = []error{errors.New("db down")}
 
@@ -93,7 +95,7 @@ func TestEndIsIdempotentAfterAFailedStatusWrite(t *testing.T) {
 func TestEndRetriesWhenTheNodeChangedUnderneath(t *testing.T) {
 	h := newHarness(t)
 	h.reserve("res-1", StatusActive, "n1")
-	h.nodes.set("n1", node.StateActive, testTenant)
+	h.nodes.hold("n1", node.StateActive, "res-1")
 	h.nodes.failApply("n1", fmt.Errorf("apply: %w", node.ErrInvalidTransition))
 	h.expire()
 
@@ -113,7 +115,7 @@ func TestEndErrorsDoNotBlockOtherReservations(t *testing.T) {
 	h := newHarness(t)
 	h.reserve("res-bad", StatusActive, "missing")
 	h.reserve("res-ok", StatusActive, "n1")
-	h.nodes.set("n1", node.StateActive, testTenant)
+	h.nodes.hold("n1", node.StateActive, "res-ok")
 	h.expire()
 
 	err := h.rec.Tick(context.Background())
@@ -134,7 +136,7 @@ func TestEndRunsBeforeStartSoBackToBackReservationsDoNotShareARunningNode(t *tes
 		ID: "res-2", Tenant: testTenant, Status: StatusScheduled, NodeIDs: []string{"n1"},
 		StartsAt: testStart.Add(time.Hour), EndsAt: testStart.Add(2 * time.Hour),
 	})
-	h.nodes.set("n1", node.StateActive, testTenant)
+	h.nodes.hold("n1", node.StateActive, "res-1")
 	h.clock.now = testStart.Add(time.Hour)
 
 	h.tick(t)

@@ -39,7 +39,7 @@ func (s stats) largest(policy placement.Policy) int {
 // minPods is the fewest pods whose free counts sum to at least count.
 func (s stats) minPods(count int) int {
 	counts := slices.Collect(maps.Values(s.pods))
-	slices.SortFunc(counts, func(a, b int) int { return b - a })
+	slices.SortFunc(counts, descending)
 	sum := 0
 	for i, c := range counts {
 		sum += c

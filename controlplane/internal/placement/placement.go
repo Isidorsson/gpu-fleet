@@ -93,13 +93,7 @@ func placeSameRack(count int, pods []podGroup) ([]string, bool) {
 }
 
 func placeSamePod(count int, pods []podGroup) ([]string, bool) {
-	var best *podGroup
-	for i := range pods {
-		p := &pods[i]
-		if p.free >= count && (best == nil || p.free < best.free) {
-			best = p
-		}
-	}
+	best := bestFitPod(pods, count)
 	if best == nil {
 		return nil, false
 	}
@@ -148,18 +142,34 @@ func fillPod(p podGroup, count int) []string {
 	return ids
 }
 
-// spanPods consumes pods in descending free count, so the fewest pods are used.
+// spanPods uses as few pods as possible: it consumes the largest pods fully
+// until one unused pod can hold the remainder, then takes the remainder from
+// the best-fit pod, so larger pods stay whole.
 func spanPods(count int, pods []podGroup) ([]string, bool) {
 	order := slices.Clone(pods)
 	slices.SortFunc(order, func(a, b podGroup) int {
 		return cmp.Or(cmp.Compare(b.free, a.free), cmp.Compare(a.name, b.name))
 	})
 	ids := make([]string, 0, count)
-	for _, p := range order {
-		ids = append(ids, fillPod(p, min(count-len(ids), p.free))...)
-		if len(ids) == count {
-			return ids, true
+	for i, p := range order {
+		rest := count - len(ids)
+		if last := bestFitPod(order[i:], rest); last != nil {
+			return append(ids, fillPod(*last, rest)...), true
 		}
+		ids = append(ids, fillPod(p, p.free)...)
 	}
 	return nil, false
+}
+
+// bestFitPod returns the pod with the fewest free nodes that still has at
+// least count, the lowest name on ties, or nil.
+func bestFitPod(pods []podGroup, count int) *podGroup {
+	var best *podGroup
+	for i := range pods {
+		p := &pods[i]
+		if p.free >= count && (best == nil || p.free < best.free || (p.free == best.free && p.name < best.name)) {
+			best = p
+		}
+	}
+	return best
 }

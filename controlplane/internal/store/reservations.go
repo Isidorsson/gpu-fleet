@@ -29,6 +29,8 @@ const (
 
 	dueToStart = selectReservation + ` WHERE r.status = 'scheduled' AND lower(r.period) <= $1
 		ORDER BY lower(r.period), r.id`
+	running = selectReservation + ` WHERE r.status IN ('active', 'degraded') AND r.period @> $1::timestamptz
+		ORDER BY upper(r.period), r.id`
 	dueToEnd = selectReservation + ` WHERE r.status IN ('active', 'degraded') AND upper(r.period) <= $1
 		ORDER BY upper(r.period), r.id`
 )
@@ -73,6 +75,11 @@ func (p *Postgres) ListReservations(ctx context.Context, tenant string) ([]reser
 // DueToStart returns scheduled reservations whose start is at or before now.
 func (p *Postgres) DueToStart(ctx context.Context, now time.Time) ([]reservation.Reservation, error) {
 	return p.collectReservations(ctx, "list reservations due to start", dueToStart, now)
+}
+
+// Running returns active or degraded reservations whose window contains now.
+func (p *Postgres) Running(ctx context.Context, now time.Time) ([]reservation.Reservation, error) {
+	return p.collectReservations(ctx, "list running reservations", running, now)
 }
 
 // DueToEnd returns active or degraded reservations whose end is at or before
@@ -132,9 +139,10 @@ func (p *Postgres) CountReservationsByStatus(ctx context.Context) (map[reservati
 	return counts, nil
 }
 
-// CancelReservation cancels a reservation at now. A scheduled one is
-// cancelled outright and its nodes are freed. A running one keeps its status,
-// so the reconciler still releases its nodes, but it ends at now.
+// CancelReservation cancels a reservation at now. A scheduled one that holds
+// no node yet is cancelled outright and its nodes are freed. A running one, or
+// a scheduled one already provisioning some of its nodes, keeps its status, so
+// the reconciler still releases its nodes, but it ends at now.
 func (p *Postgres) CancelReservation(ctx context.Context, id string, now time.Time) (reservation.Reservation, error) {
 	var res reservation.Reservation
 	err := pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
@@ -144,7 +152,7 @@ func (p *Postgres) CancelReservation(ctx context.Context, id string, now time.Ti
 		}
 		switch cur.Status {
 		case reservation.StatusScheduled:
-			err = cancelScheduled(ctx, tx, id)
+			err = cancelScheduled(ctx, tx, id, now)
 		case reservation.StatusActive, reservation.StatusDegraded:
 			err = endReservationAt(ctx, tx, id, now)
 		default:
@@ -159,7 +167,19 @@ func (p *Postgres) CancelReservation(ctx context.Context, id string, now time.Ti
 	return res, err
 }
 
-func cancelScheduled(ctx context.Context, tx pgx.Tx, id string) error {
+// cancelScheduled must run under the reservation lock: StartNode takes it
+// too, so no node can start for the reservation between the check and the
+// cancel.
+func cancelScheduled(ctx context.Context, tx pgx.Tx, id string, now time.Time) error {
+	var started bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM nodes WHERE reservation_id = $1 AND state IN ('provisioning', 'active'))`,
+		id).Scan(&started); err != nil {
+		return fmt.Errorf("check started nodes of reservation %s: %w", id, err)
+	}
+	if started {
+		return endReservationAt(ctx, tx, id, now)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM reservation_nodes WHERE reservation_id = $1`, id); err != nil {
 		return fmt.Errorf("free nodes of reservation %s: %w", id, err)
 	}

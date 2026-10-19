@@ -140,3 +140,46 @@ func TestCancelMissingReservation(t *testing.T) {
 		t.Fatalf("err = %v, want reservation.ErrNotFound", err)
 	}
 }
+
+func TestCancelScheduledReservationMidStartEndsItNow(t *testing.T) {
+	p := openReservationStore(t)
+	registerFleet(t, p, "n", 2)
+	mustInsertReservation(t, p, "r1", reservation.StatusScheduled, at(-time.Minute), at(time.Hour), "n01", "n02")
+	mustStartNode(t, p, "r1", "n01")
+
+	got, err := p.CancelReservation(t.Context(), "r1", testNow)
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	if got.Status != reservation.StatusScheduled || !got.EndsAt.Equal(testNow) {
+		t.Fatalf("cancelled = %+v, want scheduled ending now for the reconciler to wind down", got)
+	}
+	wantIDs(t, "nodes", got.NodeIDs, "n01", "n02")
+	for _, id := range got.NodeIDs {
+		if _, end := nodeRowPeriod(t, p, "r1", id); !end.Equal(testNow) {
+			t.Errorf("node %s held until %v, want %v", id, end, testNow)
+		}
+	}
+	due, err := p.DueToStart(t.Context(), testNow)
+	if err != nil || len(due) != 1 || due[0].ID != "r1" {
+		t.Fatalf("due to start = %v, %v; want r1", due, err)
+	}
+}
+
+func TestCancelScheduledIgnoresNodesHeldByAnotherReservation(t *testing.T) {
+	p := openReservationStore(t)
+	registerFleet(t, p, "n", 1)
+	mustInsertReservation(t, p, "r0", reservation.StatusActive, at(-time.Hour), at(time.Hour), "n01")
+	mustInsertReservation(t, p, "r1", reservation.StatusScheduled, at(time.Hour), at(2*time.Hour), "n01")
+	mustStartNode(t, p, "r0", "n01")
+
+	got, err := p.CancelReservation(t.Context(), "r1", testNow)
+	if err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	if got.Status != reservation.StatusCancelled || len(got.NodeIDs) != 0 {
+		t.Fatalf("cancelled = %+v, want cancelled outright", got)
+	}
+}

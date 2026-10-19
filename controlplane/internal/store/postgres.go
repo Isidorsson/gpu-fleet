@@ -97,7 +97,7 @@ func (p *Postgres) Register(ctx context.Context, n node.Node) error {
 }
 
 const (
-	nodeColumns = `id, pod, rack, bmc, state, coalesce(tenant, '')`
+	nodeColumns = `id, pod, rack, bmc, state, coalesce(tenant, ''), coalesce(reservation_id, '')`
 	selectNode  = `SELECT ` + nodeColumns + ` FROM nodes`
 )
 
@@ -176,7 +176,7 @@ func getOne[T any](ctx context.Context, q querier, sql, id string, scan pgx.RowT
 
 // nodeDests lists scan targets for nodeColumns, in order.
 func nodeDests(n *node.Node, state *string) []any {
-	return []any{&n.ID, &n.Pod, &n.Rack, &n.BMC, state, &n.Tenant}
+	return []any{&n.ID, &n.Pod, &n.Rack, &n.BMC, state, &n.Tenant, &n.Reservation}
 }
 
 func scanNode(row pgx.CollectableRow) (node.Node, error) {
