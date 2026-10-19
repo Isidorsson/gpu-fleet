@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,9 +42,12 @@ var (
 	errInvalid = errors.New("invalid request")
 )
 
-// Deps are what the handler needs. Store, Place and Summarize are required.
+// Deps are what the handler needs. Store, Attestations, Place and Summarize
+// are required.
 type Deps struct {
 	Store Store
+	// Attestations serves the signed results and the keys to check them with.
+	Attestations Attestations
 	// Place is handed to the store, which runs it inside the transaction that
 	// creates a reservation.
 	Place placement.Placer
@@ -58,22 +62,23 @@ type Deps struct {
 }
 
 type server struct {
-	store     Store
-	place     placement.Placer
-	summarize func([]placement.Candidate) []placement.PodCapacity
-	metrics   reservation.Metrics
-	now       func() time.Time
-	log       *slog.Logger
+	store        Store
+	attestations Attestations
+	place        placement.Placer
+	summarize    func([]placement.Candidate) []placement.PodCapacity
+	metrics      reservation.Metrics
+	now          func() time.Time
+	log          *slog.Logger
 }
 
 // NewHandler panics if a required dependency is missing: that is a wiring
 // bug, not a runtime condition.
 func NewHandler(d Deps) http.Handler {
-	if d.Store == nil || d.Place == nil || d.Summarize == nil {
-		panic("api: Deps.Store, Deps.Place and Deps.Summarize are required")
+	if d.Store == nil || d.Attestations == nil || d.Place == nil || d.Summarize == nil {
+		panic("api: Deps.Store, Deps.Attestations, Deps.Place and Deps.Summarize are required")
 	}
 	srv := &server{
-		store: d.Store, place: d.Place, summarize: d.Summarize,
+		store: d.Store, attestations: d.Attestations, place: d.Place, summarize: d.Summarize,
 		metrics: d.Metrics, now: d.Now, log: d.Log,
 	}
 	if srv.metrics == nil {
@@ -92,6 +97,8 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /v1/nodes/{id}", srv.getNode)
 	mux.HandleFunc("POST /v1/nodes/{id}/events", srv.applyEvent)
 	mux.HandleFunc("GET /v1/nodes/{id}/events", srv.listEvents)
+	mux.HandleFunc("GET /v1/nodes/{id}/attestation", srv.getAttestation)
+	mux.HandleFunc("GET /v1/attestation/keys", srv.attestationKeys)
 	mux.HandleFunc("POST /v1/reservations", srv.createReservation)
 	mux.HandleFunc("GET /v1/reservations", srv.listReservations)
 	mux.HandleFunc("GET /v1/reservations/{id}", srv.getReservation)
@@ -105,6 +112,7 @@ type nodeJSON struct {
 	Pod    string `json:"pod"`
 	Rack   string `json:"rack"`
 	BMC    string `json:"bmc"`
+	AKPub  string `json:"ak_pub"`
 	State  string `json:"state"`
 	Tenant string `json:"tenant,omitempty"`
 }
@@ -119,10 +127,11 @@ type eventJSON struct {
 
 func (s *server) registerNode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID   string `json:"id"`
-		Pod  string `json:"pod"`
-		Rack string `json:"rack"`
-		BMC  string `json:"bmc"`
+		ID    string `json:"id"`
+		Pod   string `json:"pod"`
+		Rack  string `json:"rack"`
+		BMC   string `json:"bmc"`
+		AKPub string `json:"ak_pub"`
 	}
 	if err := decode(w, r, &req); err != nil {
 		s.writeError(w, err)
@@ -136,7 +145,11 @@ func (s *server) registerNode(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, fmt.Errorf("%w: bmc must be an absolute http or https URL with a host, no credentials, query or fragment", errInvalid))
 		return
 	}
-	n := node.Register(node.Spec{ID: req.ID, Pod: req.Pod, Rack: req.Rack, BMC: req.BMC})
+	if !validAKPub(req.AKPub) {
+		s.writeError(w, fmt.Errorf("%w: ak_pub must be the standard base64 of a %d-byte Ed25519 public key", errInvalid, ed25519.PublicKeySize))
+		return
+	}
+	n := node.Register(node.Spec{ID: req.ID, Pod: req.Pod, Rack: req.Rack, BMC: req.BMC, AKPub: req.AKPub})
 	if err := s.store.Register(r.Context(), n); err != nil {
 		s.writeError(w, err)
 		return
@@ -240,7 +253,8 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, errBadReq):
 		return http.StatusBadRequest
-	case errors.Is(err, store.ErrNotFound), errors.Is(err, reservation.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrAttestationNotFound),
+		errors.Is(err, reservation.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, store.ErrConflict), errors.Is(err, node.ErrInvalidTransition),
 		errors.Is(err, reservation.ErrNotCancellable), errors.Is(err, placement.ErrInsufficientCapacity):
@@ -271,5 +285,5 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func toNodeJSON(n node.Node) nodeJSON {
-	return nodeJSON{ID: n.ID, Pod: n.Pod, Rack: n.Rack, BMC: n.BMC, State: string(n.State), Tenant: n.Tenant}
+	return nodeJSON{ID: n.ID, Pod: n.Pod, Rack: n.Rack, BMC: n.BMC, AKPub: n.AKPub, State: string(n.State), Tenant: n.Tenant}
 }

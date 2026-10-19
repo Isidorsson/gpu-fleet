@@ -11,13 +11,13 @@ groups:
           description: "{{ $labels.modelName }} {{ $labels.UUID }} on {{ $labels.Hostname }} (gpu {{ $labels.gpu }}) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
 
       - alert: QuarantineSpike
-        expr: sum(increase(provisioner_events_total{event=~"inspection_failed|wipe_failed|hardware_fault"}[15m])) > 5
+        expr: sum(increase(provisioner_events_total{event=~"inspection_failed|attestation_failed|wipe_failed|hardware_fault"}[15m])) > 5
         for: 0m
         labels:
           severity: warning
         annotations:
           summary: "Nodes are being quarantined faster than expected"
-          description: "{{ $value | humanize }} inspection_failed, wipe_failed and hardware_fault events in the last 15m (threshold 5)."
+          description: "{{ $value | humanize }} inspection_failed, attestation_failed, wipe_failed and hardware_fault events in the last 15m (threshold 5)."
 
       - alert: GPUAgentDown
         expr: up{job="gpu-agent"} == 0
@@ -54,3 +54,12 @@ groups:
         annotations:
           summary: "A reservation is running with fewer nodes than requested"
           description: 'Degraded reservation starts in the last 15m: {{ $value | printf "%.0f" }}. A quarantined node could not be replaced within the reservation''s placement policy.'
+
+      - alert: AttestationFailure
+        expr: increase(attestations_total{verdict="fail"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A node failed tenant attestation"
+          description: 'Failed attestations in the last 15m on {{ $labels.instance }}: {{ $value | printf "%.0f" }}. Each failing node is quarantined as attestation_failed; the reasons are in the control plane log and in GET /v1/nodes/{id}/attestation.'

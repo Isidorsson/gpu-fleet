@@ -84,6 +84,35 @@ curl -s -X POST localhost:8080/v1/reservations -H 'Content-Type: application/jso
 curl -s localhost:8080/v1/capacity
 ```
 
+## Tenant attestation
+
+Bare-metal tenants have root, so a previous tenant could leave an implant that
+survives a disk wipe. Every inspection, including the one after every wipe,
+ends with remote attestation before a node can become `available`:
+
+- The node's in-band agent returns a quote over its measured-boot PCRs
+  (firmware, BMC, bootloader, kernel) signed with the attestation key enrolled
+  at racking, the event log, and per-GPU reports (VBIOS, confidential
+  computing mode) signed by device keys certified by the GPU vendor root.
+- The verifier checks a single-use nonce, the quote signature, that the event
+  log replays to the quoted PCRs, every digest against
+  [reference values](deploy/attestation/reference.json), and the GPU chain.
+- A failure moves the node to `quarantined` (`attestation_failed`). Every
+  result is signed by the control plane, so tenants can verify it offline:
+
+```bash
+curl -s localhost:8080/v1/nodes/node-001/attestation
+```
+
+```bash
+curl -s localhost:8080/v1/attestation/keys
+```
+
+The TPM and GPU are simulated in software; [docs/attestation.md](docs/attestation.md)
+has the threat model and maps every simulated piece to TPM 2.0, NVIDIA and
+IETF RATS equivalents. Inject an implant into a simulated node with
+`curl -u sim:sim-dev-only -X POST localhost:8443/sim/systems/node-007/tamper -d '{"component":"bootloader"}'`.
+
 ## Develop
 
 ```bash
@@ -101,7 +130,12 @@ Simulated fleet (50 nodes, 5% inspection failures, 1% flaky BMC requests):
 cd controlplane && BMCSIM_USER=sim BMCSIM_PASSWORD=sim-dev-only go run ./cmd/bmcsim
 ```
 
-Control plane with 4 workers (`PROVISIONER_WORKERS`, 0 disables them):
+Control plane with 4 workers (`PROVISIONER_WORKERS`, 0 disables them). It
+needs an attestation signing key, a base64 Ed25519 seed:
+
+```bash
+export ATTEST_SIGNING_KEY=$(head -c 32 /dev/urandom | base64)
+```
 
 ```bash
 cd controlplane && DATABASE_URL=postgres://fleet:fleet-dev-only@localhost:5432/fleet?sslmode=disable BMC_USER=sim BMC_PASSWORD=sim-dev-only go run ./cmd/controlplane
@@ -171,4 +205,4 @@ On Windows Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1`.
 2. ~~Simulated Redfish BMC fleet + provisioner workers~~
 3. ~~Agent `/metrics` exporter on :9400, Grafana dashboard~~
 4. ~~Capacity reservations with topology awareness~~
-5. Stretch: Kubernetes remediation operator or tenant attestation
+5. ~~Tenant attestation~~ (a Kubernetes remediation operator is the remaining stretch goal)

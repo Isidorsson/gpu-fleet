@@ -16,12 +16,21 @@ const releaseTimeout = 5 * time.Second
 
 // plan describes how a work state is processed. The machine is powered off
 // after an inspection or wipe so it never idles in the ramdisk, but a
-// provisioned machine is left running for its tenant.
+// provisioned machine is left running for its tenant. A plan that attests
+// does so while the ramdisk is still running, between the task and the power
+// off, because the evidence comes from the running ramdisk.
 type plan struct {
 	task          deployagent.Task
 	success       node.Event
 	failure       node.Event
 	powerOffAfter bool
+	attests       bool
+}
+
+// ending is the event that settles a task and the outcome it counts as.
+type ending struct {
+	event   node.Event
+	outcome Outcome
 }
 
 var plans = map[node.State]plan{
@@ -30,6 +39,7 @@ var plans = map[node.State]plan{
 		success:       node.EventInspectionPassed,
 		failure:       node.EventInspectionFailed,
 		powerOffAfter: true,
+		attests:       true,
 	},
 	node.StateProvisioning: {
 		task:    deployagent.TaskDeploy,
@@ -119,20 +129,32 @@ func (s *session) execute(ctx context.Context, p plan) error {
 }
 
 func (s *session) process(ctx context.Context, p plan) (Outcome, error) {
-	phase, err := s.runTask(ctx, p.task)
-	if err == nil {
-		s.logger().Info("task finished", "phase", phase)
-	}
+	end, err := s.runAndCheck(ctx, p)
 	if err == nil && p.powerOffAfter {
 		err = s.forceOff(ctx)
 	}
 	if err != nil {
 		return s.quarantineOnFault(ctx, err)
 	}
-	if phase == deployagent.PhaseFailed {
-		return s.settle(ctx, p.failure, OutcomeFailed)
+	return s.settle(ctx, end.event, end.outcome)
+}
+
+// runAndCheck runs the task and decides how it ends. A task the agent
+// reported as failed is not attested: its evidence would prove nothing.
+func (s *session) runAndCheck(ctx context.Context, p plan) (ending, error) {
+	phase, err := s.runTask(ctx, p.task)
+	if err != nil {
+		return ending{}, err
 	}
-	return s.settle(ctx, p.success, OutcomeSucceeded)
+	s.logger().Info("task finished", "phase", phase)
+	switch {
+	case phase == deployagent.PhaseFailed:
+		return ending{p.failure, OutcomeFailed}, nil
+	case p.attests:
+		return s.attestNode(ctx, p)
+	default:
+		return ending{p.success, OutcomeSucceeded}, nil
+	}
 }
 
 // quarantineOnFault turns a node fault into hardware_fault. Anything else

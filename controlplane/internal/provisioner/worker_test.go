@@ -34,7 +34,7 @@ func TestStepScenarios(t *testing.T) {
 			scripts:    map[deployagent.Task][]deployagent.Phase{deployagent.TaskInspect: {running, succeeded}},
 			wantState:  node.StateAvailable,
 			wantEvents: []node.Event{node.EventStartInspection, node.EventInspectionPassed},
-			wantCalls:  taskCalls(deployagent.TaskInspect, true),
+			wantCalls:  attestedInspectCalls(),
 		},
 		{
 			name:       "failed inspection quarantines",
@@ -68,7 +68,7 @@ func TestStepScenarios(t *testing.T) {
 			wantCalls: slices.Concat(
 				taskCalls(deployagent.TaskDeploy, false),
 				taskCalls(deployagent.TaskWipe, true),
-				taskCalls(deployagent.TaskInspect, true),
+				attestedInspectCalls(),
 			),
 		},
 		{

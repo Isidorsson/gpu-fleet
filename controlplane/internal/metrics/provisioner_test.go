@@ -7,6 +7,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/provisioner"
@@ -99,9 +100,13 @@ func TestBMCRequestsCountPerOpAndResult(t *testing.T) {
 	p.BMCRequest(provisioner.OpSetPXE, provisioner.ResultTransient)
 	p.BMCRequest(provisioner.OpReset, provisioner.ResultError)
 	p.BMCRequest(provisioner.OpStatus, provisioner.ResultOK)
+	p.BMCRequest(provisioner.OpAttest, provisioner.ResultOK)
+	p.BMCRequest(provisioner.OpAttest, provisioner.ResultTransient)
 
 	gatherAndCompare(t, m, family("provisioner_bmc_requests_total",
 		"BMC and agent call attempts, retries included.", "counter",
+		`provisioner_bmc_requests_total{op="attest",result="ok"} 1`,
+		`provisioner_bmc_requests_total{op="attest",result="transient"} 1`,
 		`provisioner_bmc_requests_total{op="reset",result="error"} 1`,
 		`provisioner_bmc_requests_total{op="set_pxe",result="transient"} 2`,
 		`provisioner_bmc_requests_total{op="set_task",result="ok"} 1`,
@@ -116,9 +121,11 @@ func TestEventsTotalCountsPerEvent(t *testing.T) {
 	p.EventApplied(node.EventHardwareFault)
 	p.EventApplied(node.EventHardwareFault)
 	p.EventApplied(node.EventInspectionPassed)
+	p.EventApplied(node.EventAttestationFailed)
 
 	gatherAndCompare(t, m, family("provisioner_events_total",
 		"Lifecycle events applied by provisioner workers.", "counter",
+		`provisioner_events_total{event="attestation_failed"} 1`,
 		`provisioner_events_total{event="hardware_fault"} 2`,
 		`provisioner_events_total{event="inspection_failed"} 0`,
 		`provisioner_events_total{event="inspection_passed"} 1`,
@@ -130,10 +137,37 @@ func TestQuarantineCausesStartAtZero(t *testing.T) {
 	m := newTestMetrics(t, &fakeCounter{})
 	gatherAndCompare(t, m, family("provisioner_events_total",
 		"Lifecycle events applied by provisioner workers.", "counter",
+		`provisioner_events_total{event="attestation_failed"} 0`,
 		`provisioner_events_total{event="hardware_fault"} 0`,
 		`provisioner_events_total{event="inspection_failed"} 0`,
 		`provisioner_events_total{event="wipe_failed"} 0`,
 	), "provisioner_events_total")
+}
+
+func TestAttestationsTotalStartsAtZeroForBothVerdicts(t *testing.T) {
+	m := newTestMetrics(t, &fakeCounter{})
+
+	gatherAndCompare(t, m, family("attestations_total",
+		"Node attestations run by provisioner workers, by verdict.", "counter",
+		`attestations_total{verdict="fail"} 0`,
+		`attestations_total{verdict="pass"} 0`,
+	), "attestations_total")
+}
+
+func TestAttestationsTotalCountsPerVerdict(t *testing.T) {
+	m := newTestMetrics(t, &fakeCounter{})
+	p := m.Provisioner()
+
+	p.Attested(attest.VerdictPass)
+	p.Attested(attest.VerdictPass)
+	p.Attested(attest.VerdictPass)
+	p.Attested(attest.VerdictFail)
+
+	gatherAndCompare(t, m, family("attestations_total",
+		"Node attestations run by provisioner workers, by verdict.", "counter",
+		`attestations_total{verdict="fail"} 1`,
+		`attestations_total{verdict="pass"} 3`,
+	), "attestations_total")
 }
 
 func TestLeaseLostTotalStartsAtZeroWithoutLabels(t *testing.T) {
@@ -163,6 +197,10 @@ func TestProvisionerLabelValuesMatchTheContract(t *testing.T) {
 		{string(provisioner.OpSetPXE), "set_pxe"},
 		{string(provisioner.OpReset), "reset"},
 		{string(provisioner.OpStatus), "status"},
+		{string(provisioner.OpAttest), "attest"},
+		{string(attest.VerdictPass), "pass"},
+		{string(attest.VerdictFail), "fail"},
+		{string(node.EventAttestationFailed), "attestation_failed"},
 		{string(provisioner.ResultOK), "ok"},
 		{string(provisioner.ResultTransient), "transient"},
 		{string(provisioner.ResultError), "error"},

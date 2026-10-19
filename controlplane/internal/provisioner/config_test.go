@@ -69,17 +69,20 @@ func TestMinimalValidConfig(t *testing.T) {
 }
 
 func TestMissingDependenciesAreRejected(t *testing.T) {
-	good := validDeps()
 	tests := []struct {
-		name string
-		deps Deps
+		name   string
+		mutate func(*Deps)
 	}{
-		{"no store", Deps{Dial: good.Dial}},
-		{"no dial", Deps{Store: good.Store}},
+		{"no store", func(d *Deps) { d.Store = nil }},
+		{"no dial", func(d *Deps) { d.Dial = nil }},
+		{"no attester", func(d *Deps) { d.Attester = nil }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewWorker(testConfig(), tc.deps)
+			deps := validDeps()
+			tc.mutate(&deps)
+
+			_, err := NewWorker(testConfig(), deps)
 
 			if !errors.Is(err, ErrInvalidConfig) {
 				t.Fatalf("NewWorker error = %v, want ErrInvalidConfig", err)
@@ -120,5 +123,5 @@ func TestWallClockSleep(t *testing.T) {
 }
 
 func validDeps() Deps {
-	return Deps{Store: newFakeStore(), Dial: newFakeMachine().dial}
+	return Deps{Store: newFakeStore(), Dial: newFakeMachine().dial, Attester: passAttester{}}
 }

@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,11 +102,12 @@ func (f *fakeStore) Events(_ context.Context, id string) ([]store.EventRecord, e
 
 func testDeps(fs *fakeStore) Deps {
 	return Deps{
-		Store:     fs,
-		Place:     fakePlace,
-		Summarize: (&fakeSummarizer{}).summarize,
-		Now:       func() time.Time { return testNow },
-		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:        fs,
+		Attestations: newFakeAttestations(),
+		Place:        fakePlace,
+		Summarize:    (&fakeSummarizer{}).summarize,
+		Now:          func() time.Time { return testNow },
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -140,15 +144,18 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (int, map
 }
 
 const (
-	testBMC    = "http://10.0.0.1:8443"
-	gpu001Body = `{"id":"gpu-001","pod":"p1","rack":"r1","bmc":"` + testBMC + `"}`
+	testBMC = "http://10.0.0.1:8443"
+	// testAKPub is the base64 of 32 bytes (0x00 to 0x1f).
+	testAKPub  = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	gpu001Body = `{"id":"gpu-001","pod":"p1","rack":"r1","bmc":"` + testBMC + `","ak_pub":"` + testAKPub + `"}`
 )
 
 func TestRegisterNode(t *testing.T) {
 	srv := newTestServer(t, newFakeStore())
 	status, body := do(t, srv, http.MethodPost, "/v1/nodes", gpu001Body)
-	if status != http.StatusCreated || body["state"] != "racked" || body["bmc"] != testBMC || body["pod"] != "p1" {
-		t.Fatalf("register = %d %v, want 201 racked in pod p1 with bmc %s", status, body, testBMC)
+	if status != http.StatusCreated || body["state"] != "racked" || body["bmc"] != testBMC || body["pod"] != "p1" ||
+		body["ak_pub"] != testAKPub {
+		t.Fatalf("register = %d %v, want 201 racked in pod p1 with bmc %s and ak_pub %s", status, body, testBMC, testAKPub)
 	}
 	status, _ = do(t, srv, http.MethodPost, "/v1/nodes", gpu001Body)
 	if status != http.StatusConflict {
@@ -174,6 +181,21 @@ func TestRegisteredBMCIsReturnedByGetAndList(t *testing.T) {
 	}
 }
 
+func TestRegisteredAKPubIsReturnedByGetAndList(t *testing.T) {
+	srv := newTestServer(t, newFakeStore())
+	do(t, srv, http.MethodPost, "/v1/nodes", gpu001Body)
+
+	_, got := do(t, srv, http.MethodGet, "/v1/nodes/gpu-001", "")
+	if got["ak_pub"] != testAKPub {
+		t.Fatalf("get = %v, want ak_pub %s", got, testAKPub)
+	}
+	_, list := do(t, srv, http.MethodGet, "/v1/nodes", "")
+	nodes, _ := list["nodes"].([]any)
+	if first, _ := nodes[0].(map[string]any); len(nodes) != 1 || first["ak_pub"] != testAKPub {
+		t.Fatalf("list = %v, want the node with ak_pub %s", list, testAKPub)
+	}
+}
+
 func TestRegisteredPodIsReturnedByGetAndList(t *testing.T) {
 	srv := newTestServer(t, newFakeStore())
 	do(t, srv, http.MethodPost, "/v1/nodes", gpu001Body)
@@ -191,23 +213,72 @@ func TestRegisteredPodIsReturnedByGetAndList(t *testing.T) {
 
 func TestRegisterNodeValidation(t *testing.T) {
 	srv := newTestServer(t, newFakeStore())
+	const ak = `,"ak_pub":"` + testAKPub + `"`
 	tests := []struct {
 		body string
 		want int
 	}{
 		{`not json`, http.StatusBadRequest},
-		{`{"id":"gpu-001","pod":"p1","rack":"r1","bmc":"http://h","extra":1}`, http.StatusBadRequest},
-		{`{"id":"","pod":"p1","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
-		{`{"id":"has space","pod":"p1","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
-		{`{"id":"gpu-001","pod":"p1","rack":"","bmc":"http://h"}`, http.StatusUnprocessableEntity},
-		{`{"id":"gpu-001","pod":"p1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
-		{`{"id":"gpu-001","pod":"","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
-		{`{"id":"gpu-001","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"p1","rack":"r1","bmc":"http://h"` + ak + `,"extra":1}`, http.StatusBadRequest},
+		{`{"id":"","pod":"p1","rack":"r1","bmc":"http://h"` + ak + `}`, http.StatusUnprocessableEntity},
+		{`{"id":"has space","pod":"p1","rack":"r1","bmc":"http://h"` + ak + `}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"p1","rack":"","bmc":"http://h"` + ak + `}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"p1","bmc":"http://h"` + ak + `}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"","rack":"r1","bmc":"http://h"` + ak + `}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","rack":"r1","bmc":"http://h"` + ak + `}`, http.StatusUnprocessableEntity},
 	}
 	for _, tt := range tests {
 		if status, body := do(t, srv, http.MethodPost, "/v1/nodes", tt.body); status != tt.want {
 			t.Errorf("POST %s = %d %v, want %d", tt.body, status, body, tt.want)
 		}
+	}
+}
+
+func TestRegisterNodeAKPubValidation(t *testing.T) {
+	key := func(n int) []byte { return bytes.Repeat([]byte{0xfb}, n) }
+	for _, tt := range []struct {
+		name string
+		ak   string
+		want int
+	}{
+		{"valid", base64.StdEncoding.EncodeToString(key(32)), http.StatusCreated},
+		{"empty", "", http.StatusUnprocessableEntity},
+		{"not base64", "!!!not base64!!!", http.StatusUnprocessableEntity},
+		{"url alphabet", base64.URLEncoding.EncodeToString(key(32)), http.StatusUnprocessableEntity},
+		{"unpadded", base64.RawStdEncoding.EncodeToString(key(32)), http.StatusUnprocessableEntity},
+		{"too short", base64.StdEncoding.EncodeToString(key(31)), http.StatusUnprocessableEntity},
+		{"too long", base64.StdEncoding.EncodeToString(key(33)), http.StatusUnprocessableEntity},
+		{"private key sized", base64.StdEncoding.EncodeToString(key(64)), http.StatusUnprocessableEntity},
+		{"hex", hex.EncodeToString(key(32)), http.StatusUnprocessableEntity},
+		{"leading space", " " + base64.StdEncoding.EncodeToString(key(32)), http.StatusUnprocessableEntity},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := newFakeStore()
+			srv := newTestServer(t, fs)
+			body, err := json.Marshal(map[string]string{"id": "gpu-001", "pod": "p1", "rack": "r1", "bmc": testBMC, "ak_pub": tt.ak})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			status, resp := do(t, srv, http.MethodPost, "/v1/nodes", string(body))
+			if status != tt.want {
+				t.Errorf("ak_pub %q = %d %v, want %d", tt.ak, status, resp, tt.want)
+			}
+			if _, registered := fs.nodes["gpu-001"]; registered != (tt.want == http.StatusCreated) {
+				t.Errorf("node registered = %v after %d", registered, status)
+			}
+		})
+	}
+}
+
+func TestRegisterNodeRequiresAKPub(t *testing.T) {
+	fs := newFakeStore()
+	srv := newTestServer(t, fs)
+	status, body := do(t, srv, http.MethodPost, "/v1/nodes", `{"id":"gpu-001","pod":"p1","rack":"r1","bmc":"`+testBMC+`"}`)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("register without ak_pub = %d %v, want 422", status, body)
+	}
+	if len(fs.nodes) != 0 {
+		t.Errorf("node registered without an attestation key: %v", fs.nodes)
 	}
 }
 
@@ -237,7 +308,7 @@ func TestRegisterNodeBMCValidation(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTestServer(t, newFakeStore())
-			body, err := json.Marshal(map[string]string{"id": "gpu-001", "pod": "p1", "rack": "r1", "bmc": tt.bmc})
+			body, err := json.Marshal(map[string]string{"id": "gpu-001", "pod": "p1", "rack": "r1", "bmc": tt.bmc, "ak_pub": testAKPub})
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
@@ -250,7 +321,7 @@ func TestRegisterNodeBMCValidation(t *testing.T) {
 
 func TestRegisterNodeRequiresBMC(t *testing.T) {
 	srv := newTestServer(t, newFakeStore())
-	status, body := do(t, srv, http.MethodPost, "/v1/nodes", `{"id":"gpu-001","pod":"p1","rack":"r1"}`)
+	status, body := do(t, srv, http.MethodPost, "/v1/nodes", `{"id":"gpu-001","pod":"p1","rack":"r1","ak_pub":"`+testAKPub+`"}`)
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("register without bmc = %d %v, want 422", status, body)
 	}

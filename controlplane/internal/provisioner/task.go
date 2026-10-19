@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
+	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/redfish"
 )
 
@@ -67,6 +70,42 @@ func (s *session) startTask(ctx context.Context, task deployagent.Task) error {
 		}
 	}
 	return nil
+}
+
+// attestNode verifies the node while its ramdisk is still running. It renews
+// the lease first because the verdict decides whether the node reaches the
+// pool, and the power off that follows renews it again. A verdict other than
+// pass or fail cannot be trusted, so it quarantines the node like a failed
+// call: the check fails closed.
+func (s *session) attestNode(ctx context.Context, p plan) (ending, error) {
+	if err := s.renew(ctx); err != nil {
+		return ending{}, err
+	}
+	res, err := s.attestCall(ctx)
+	if err != nil {
+		return ending{}, err
+	}
+	switch res.Verdict {
+	case attest.VerdictPass, attest.VerdictFail:
+	default:
+		return ending{}, &faultError{fmt.Errorf("attest: unknown verdict %q", res.Verdict)}
+	}
+	s.w.metrics.Attested(res.Verdict)
+	if res.Verdict == attest.VerdictFail {
+		s.logger().Warn("attestation failed", "reasons", strings.Join(res.Reasons, "; "), "reference_version", res.ReferenceVersion)
+		return ending{node.EventAttestationFailed, OutcomeFailed}, nil
+	}
+	s.logger().Info("attestation passed", "reference_version", res.ReferenceVersion)
+	return ending{p.success, OutcomeSucceeded}, nil
+}
+
+func (s *session) attestCall(ctx context.Context) (attest.Result, error) {
+	var res attest.Result
+	err := s.call(ctx, OpAttest, "attest", func(ctx context.Context) (err error) {
+		res, err = s.w.attester.Attest(ctx, s.n)
+		return err
+	})
+	return res, err
 }
 
 // forceOff renews the lease first: powering off is destructive, so it must not

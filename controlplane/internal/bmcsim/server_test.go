@@ -219,12 +219,18 @@ var systemEndpoints = []endpoint{
 	{"POST", "/redfish/v1/Systems/{id}/Actions/ComputerSystem.Reset", `{"ResetType": "On"}`},
 	{"PUT", "/agent/{id}/task", `{"task": "inspect"}`},
 	{"GET", "/agent/{id}/status", ""},
+	{"GET", "/agent/{id}/identity", ""},
+	{"GET", "/agent/{id}/attestation?nonce=" + nonceA, ""},
 }
 
 var simEndpoints = []endpoint{
 	{"POST", "/sim/systems/{id}/fault", ""},
 	{"DELETE", "/sim/systems/{id}/fault", ""},
+	{"POST", "/sim/systems/{id}/tamper", `{"component": "kernel"}`},
+	{"DELETE", "/sim/systems/{id}/tamper", ""},
 }
+
+var vendorRootEndpoint = endpoint{"GET", "/sim/vendor-root", ""}
 
 func (e endpoint) forID(id string) endpoint {
 	e.path = strings.ReplaceAll(e.path, "{id}", id)
@@ -234,7 +240,8 @@ func (e endpoint) forID(id string) endpoint {
 func allEndpoints() []endpoint {
 	all := []endpoint{{"GET", "/redfish/v1/Systems", ""}}
 	all = append(all, systemEndpoints...)
-	return append(all, simEndpoints...)
+	all = append(all, simEndpoints...)
+	return append(all, vendorRootEndpoint)
 }
 
 func TestUnauthenticatedRequestsAreRejected(t *testing.T) {
@@ -375,6 +382,7 @@ func TestSimEndpointsExemptFromBMCErrorRate(t *testing.T) {
 			t.Fatalf("%s %s = %d, want 204", e.method, e.path, got)
 		}
 	}
+	h.mustDo(t, http.StatusOK, vendorRootEndpoint.method, vendorRootEndpoint.path, "")
 }
 
 func TestErrorPrecedence(t *testing.T) {
@@ -417,6 +425,9 @@ func TestConcurrentRequestsAreRaceFree(t *testing.T) {
 				h.do("POST", resetPath, `{"ResetType": "ForceRestart"}`)
 				h.do("GET", "/agent/node-001/status", "")
 				h.do("POST", "/sim/systems/node-001/fault", "")
+				h.do("POST", "/sim/systems/node-001/tamper", `{"component": "ak"}`)
+				h.do("GET", "/agent/node-001/attestation?nonce="+nonceA, "")
+				h.do("DELETE", "/sim/systems/node-001/tamper", "")
 				h.do("GET", "/redfish/v1/Systems/node-001", "")
 				h.clock.Advance(time.Second)
 			}

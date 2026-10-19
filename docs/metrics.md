@@ -71,7 +71,7 @@ Label values:
   failure) \| `fault` (node quarantined via `hardware_fault`: retries
   exhausted, non-transient error or timeout) \| `abandoned` (lease lost,
   operator changed the node, or shutdown)
-- `op`: `set_task` \| `set_pxe` \| `reset` \| `status`
+- `op`: `set_task` \| `set_pxe` \| `reset` \| `status` \| `attest`
 - `result`: `ok` \| `transient` \| `error`
 - `event`: any `node.Event` value
 - `state`: any `node.State` value
@@ -101,7 +101,7 @@ Same `/metrics` endpoint. See [reservations.md](reservations.md).
 | Nodes by state | time series, stacked | `sum by (state) (fleet_nodes)` |
 | Quarantined | stat | `sum(fleet_nodes{state="quarantined"})` |
 | Unhealthy GPUs | stat | `count(gpu_agent_gpu_healthy == 0) or vector(0)` |
-| Quarantine causes (15m) | bar gauge | `sum by (event) (increase(provisioner_events_total{event=~"inspection_failed\|wipe_failed\|hardware_fault"}[15m]))` |
+| Quarantine causes (15m) | bar gauge | `sum by (event) (increase(provisioner_events_total{event=~"inspection_failed\|attestation_failed\|wipe_failed\|hardware_fault"}[15m]))` |
 | Task duration p50 / p95 | time series | `histogram_quantile(0.5, sum by (task, le) (rate(provisioner_task_duration_seconds_bucket[5m])))` and the same with `0.95` |
 | Task outcomes | time series | `sum by (task, outcome) (rate(provisioner_tasks_total[5m]))` |
 | BMC error ratio | time series | `sum by (op) (rate(provisioner_bmc_requests_total{result!="ok"}[5m])) / sum by (op) (rate(provisioner_bmc_requests_total[5m]))` |
@@ -123,8 +123,28 @@ Row "Capacity" (between Fleet and Provisioning):
 | Alert | Expr | For | Severity |
 |---|---|---|---|
 | `GPUFatalXid` | `gpu_agent_gpu_healthy == 0` | 1m | critical |
-| `QuarantineSpike` | `sum(increase(provisioner_events_total{event=~"inspection_failed\|wipe_failed\|hardware_fault"}[15m])) > 5` | 0m | warning |
+| `QuarantineSpike` | `sum(increase(provisioner_events_total{event=~"inspection_failed\|attestation_failed\|wipe_failed\|hardware_fault"}[15m])) > 5` | 0m | warning |
 | `GPUAgentDown` | `up{job="gpu-agent"} == 0` | 2m | warning |
 | `GPUAgentStale` | `time() - gpu_agent_last_sample_timestamp_seconds > 60` | 2m | warning |
 | `ControlPlaneDown` | `up{job="controlplane"} == 0` | 2m | critical |
 | `ReservationDegraded` | `increase(reservation_degraded_total[15m]) > 0` | 0m | warning |
+
+## Attestation (control plane)
+
+See [attestation.md](attestation.md).
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `attestations_total` | counter | `verdict` | one per attestation run by a worker; `pass` and `fail` pre-initialized to 0 |
+
+`attestation_failed` is a quarantine cause: it is pre-initialized in
+`provisioner_events_total` and included in the `QuarantineSpike` regex and
+the "Quarantine causes" panel.
+
+| Panel (Fleet row) | Type | Query |
+|---|---|---|
+| Attestation failures (24h) | stat | `sum(increase(attestations_total{verdict="fail"}[24h]))` |
+
+| Alert | Expr | For | Severity |
+|---|---|---|---|
+| `AttestationFailure` | `increase(attestations_total{verdict="fail"}[15m]) > 0` | 0m | warning |

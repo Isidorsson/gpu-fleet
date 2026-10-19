@@ -67,7 +67,14 @@ func run() error {
 	if err := m.RegisterCapacity(db); err != nil {
 		return err
 	}
-	workers, err := startWorkers(ctx, db, m.Provisioner(), log)
+	creds := bmcCredentialsFromEnv()
+	attestations, err := newAttestation(db, creds, log)
+	if err != nil {
+		return err
+	}
+	workers, err := startWorkers(ctx, workerDeps{
+		db: db, metrics: m.Provisioner(), attester: attestations, creds: creds, log: log,
+	})
 	if err != nil {
 		return err
 	}
@@ -79,11 +86,12 @@ func run() error {
 	defer reconciler.Wait()
 
 	apiHandler := api.NewHandler(api.Deps{
-		Store:     db,
-		Place:     placement.Place,
-		Summarize: placement.Summarize,
-		Metrics:   m.Reservations(),
-		Log:       log,
+		Store:        db,
+		Place:        placement.Place,
+		Summarize:    placement.Summarize,
+		Metrics:      m.Reservations(),
+		Attestations: attestations,
+		Log:          log,
 	})
 	srv := &http.Server{
 		Addr:              addr,

@@ -16,4 +16,9 @@ var (
 	// ErrBadPlacement means the placer returned nodes that were not among the
 	// free candidates it was given, or the wrong number of them.
 	ErrBadPlacement = errors.New("placer returned an invalid placement")
+	// ErrNonceInvalid means an attestation nonce is unknown, expired, already
+	// used or was issued for another node.
+	ErrNonceInvalid = errors.New("attestation nonce invalid")
+	// ErrAttestationNotFound means the node has no recorded attestation.
+	ErrAttestationNotFound = errors.New("attestation not found")
 )

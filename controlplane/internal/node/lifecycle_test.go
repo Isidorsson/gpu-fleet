@@ -14,6 +14,7 @@ func TestNextValidTransitions(t *testing.T) {
 		{StateRacked, EventStartInspection, StateInspecting},
 		{StateInspecting, EventInspectionPassed, StateAvailable},
 		{StateInspecting, EventInspectionFailed, StateQuarantined},
+		{StateInspecting, EventAttestationFailed, StateQuarantined},
 		{StateAvailable, EventProvision, StateProvisioning},
 		{StateProvisioning, EventProvisionSucceeded, StateActive},
 		{StateProvisioning, EventProvisionFailed, StateWiping},

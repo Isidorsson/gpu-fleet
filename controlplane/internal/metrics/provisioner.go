@@ -5,6 +5,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/provisioner"
@@ -17,6 +18,7 @@ const (
 	labelOp      = "op"
 	labelResult  = "result"
 	labelEvent   = "event"
+	labelVerdict = "verdict"
 )
 
 // taskDurationBuckets (seconds) span a fast fake task up to the 10 minute
@@ -30,21 +32,28 @@ type provisionerMetrics struct {
 	duration  *prometheus.HistogramVec
 	bmc       *prometheus.CounterVec
 	events    *prometheus.CounterVec
+	attested  *prometheus.CounterVec
 	leaseLost prometheus.Counter
 }
 
 var _ provisioner.Metrics = (*provisionerMetrics)(nil)
 
-// quarantineCauses start at 0 so increase() in the QuarantineSpike alert sees
-// the first occurrence; a series born at 1 has no prior sample to diff against.
+// quarantineCauses and verdicts start at 0 so increase() in the QuarantineSpike
+// and AttestationFailure alerts sees the first occurrence; a series born at 1
+// has no prior sample to diff against.
 var quarantineCauses = []node.Event{
-	node.EventInspectionFailed, node.EventWipeFailed, node.EventHardwareFault,
+	node.EventInspectionFailed, node.EventAttestationFailed, node.EventWipeFailed, node.EventHardwareFault,
 }
+
+var verdicts = []attest.Verdict{attest.VerdictPass, attest.VerdictFail}
 
 func newProvisionerMetrics() *provisionerMetrics {
 	m := newProvisionerCollectors()
 	for _, ev := range quarantineCauses {
 		m.events.WithLabelValues(string(ev))
+	}
+	for _, v := range verdicts {
+		m.attested.WithLabelValues(string(v))
 	}
 	return m
 }
@@ -68,6 +77,10 @@ func newProvisionerCollectors() *provisionerMetrics {
 			Name: "provisioner_events_total",
 			Help: "Lifecycle events applied by provisioner workers.",
 		}, []string{labelEvent}),
+		attested: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "attestations_total",
+			Help: "Node attestations run by provisioner workers, by verdict.",
+		}, []string{labelVerdict}),
 		leaseLost: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "provisioner_lease_lost_total",
 			Help: "Sessions abandoned because the node lease was lost.",
@@ -76,7 +89,7 @@ func newProvisionerCollectors() *provisionerMetrics {
 }
 
 func (p *provisionerMetrics) collectors() []prometheus.Collector {
-	return []prometheus.Collector{p.tasks, p.duration, p.bmc, p.events, p.leaseLost}
+	return []prometheus.Collector{p.tasks, p.duration, p.bmc, p.events, p.attested, p.leaseLost}
 }
 
 func (p *provisionerMetrics) TaskFinished(task deployagent.Task, outcome provisioner.Outcome, d time.Duration) {
@@ -90,6 +103,10 @@ func (p *provisionerMetrics) BMCRequest(op provisioner.BMCOp, result provisioner
 
 func (p *provisionerMetrics) EventApplied(ev node.Event) {
 	p.events.WithLabelValues(string(ev)).Inc()
+}
+
+func (p *provisionerMetrics) Attested(v attest.Verdict) {
+	p.attested.WithLabelValues(string(v)).Inc()
 }
 
 func (p *provisionerMetrics) LeaseLost() { p.leaseLost.Inc() }

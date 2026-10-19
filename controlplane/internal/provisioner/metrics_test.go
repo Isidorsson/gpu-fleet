@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/redfish"
@@ -31,6 +32,7 @@ type recordingMetrics struct {
 	tasks     []taskRecord
 	bmc       []bmcRecord
 	events    []node.Event
+	attested  []attest.Verdict
 	leaseLost int
 }
 
@@ -50,6 +52,12 @@ func (r *recordingMetrics) EventApplied(ev node.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, ev)
+}
+
+func (r *recordingMetrics) Attested(v attest.Verdict) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.attested = append(r.attested, v)
 }
 
 func (r *recordingMetrics) LeaseLost() {
@@ -77,6 +85,8 @@ func opOf(call string) BMCOp {
 		return OpSetPXE
 	case call == "status":
 		return OpStatus
+	case call == "attest":
+		return OpAttest
 	case strings.HasPrefix(call, "reset:"):
 		return OpReset
 	default:
@@ -249,6 +259,7 @@ func TestEveryCallAttemptIsCountedByOp(t *testing.T) {
 		{"pxe_once", OpSetPXE, redfish.ErrTransient},
 		{"reset:ForceRestart", OpReset, fmt.Errorf("post: %w", redfish.ErrTransient)},
 		{"status", OpStatus, fmt.Errorf("get: %w", deployagent.ErrTransient)},
+		{"attest", OpAttest, fmt.Errorf("fetch evidence: %w", deployagent.ErrTransient)},
 		{"reset:ForceOff", OpReset, redfish.ErrTransient},
 	}
 	for _, tc := range tests {
@@ -272,7 +283,7 @@ func TestEveryCallAttemptIsCountedByOp(t *testing.T) {
 			assertEqual(t, "transient", h.metrics.countBMC(bmcRecord{tc.op, ResultTransient}), 2)
 			assertEqual(t, "error", h.metrics.countBMC(bmcRecord{tc.op, ResultError}), 0)
 			okTotal := 0
-			for _, op := range []BMCOp{OpSetTask, OpSetPXE, OpReset, OpStatus} {
+			for _, op := range []BMCOp{OpSetTask, OpSetPXE, OpReset, OpStatus, OpAttest} {
 				okTotal += h.metrics.countBMC(bmcRecord{op, ResultOK})
 			}
 			assertEqual(t, "ok", okTotal, len(wantOps)-2)
@@ -389,7 +400,7 @@ func TestLeaseLostBeforeFirstTaskStillCounts(t *testing.T) {
 func TestWorkerWithoutMetricsDiscardsThem(t *testing.T) {
 	h := newHarness(t)
 	h.store.add(nodeIn(node.StateInspecting, ""))
-	w, err := NewWorker(testConfig(), Deps{Store: h.store, Dial: h.machine.dial, Clock: h.clock})
+	w, err := NewWorker(testConfig(), Deps{Store: h.store, Dial: h.machine.dial, Attester: h.attester, Clock: h.clock})
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}

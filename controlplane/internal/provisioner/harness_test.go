@@ -36,13 +36,14 @@ func testConfig() Config {
 }
 
 type harness struct {
-	store   *fakeStore
-	machine *fakeMachine
-	clock   *fakeClock
-	logs    *bytes.Buffer
-	metrics *recordingMetrics
-	worker  *Worker
-	start   time.Time
+	store    *fakeStore
+	machine  *fakeMachine
+	attester *fakeAttester
+	clock    *fakeClock
+	logs     *bytes.Buffer
+	metrics  *recordingMetrics
+	worker   *Worker
+	start    time.Time
 }
 
 func newHarness(t *testing.T, mutate ...func(*Config)) *harness {
@@ -54,13 +55,17 @@ func newHarness(t *testing.T, mutate ...func(*Config)) *harness {
 		logs:    &bytes.Buffer{},
 		metrics: &recordingMetrics{},
 	}
+	h.attester = newFakeAttester(h.machine)
 	h.start = h.clock.Now()
 	cfg := testConfig()
 	for _, m := range mutate {
 		m(&cfg)
 	}
 	log := slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	w, err := NewWorker(cfg, Deps{Store: h.store, Dial: h.machine.dial, Clock: h.clock, Log: log, Metrics: h.metrics})
+	w, err := NewWorker(cfg, Deps{
+		Store: h.store, Dial: h.machine.dial, Attester: h.attester,
+		Clock: h.clock, Log: log, Metrics: h.metrics,
+	})
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -90,6 +95,12 @@ func taskCalls(task deployagent.Task, powerOff bool) []string {
 		calls = append(calls, "reset:ForceOff")
 	}
 	return calls
+}
+
+// attestedInspectCalls is taskCalls for an inspection that the agent reported
+// as succeeded: the node is attested before it is powered off.
+func attestedInspectCalls() []string {
+	return append(taskCalls(deployagent.TaskInspect, false), "attest", "reset:ForceOff")
 }
 
 func assertSlice[T comparable](t *testing.T, what string, got, want []T) {

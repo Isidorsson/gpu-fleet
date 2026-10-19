@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/provisioner"
@@ -85,8 +86,15 @@ func (m *machine) Status(context.Context, string) (deployagent.Status, error) {
 	return deployagent.Status{Task: m.task, Phase: phase}, nil
 }
 
-func TestWorkerFeedsTheRegistry(t *testing.T) {
-	m := newTestMetrics(t, &fakeCounter{})
+// verdictAttester answers every attestation with one verdict.
+type verdictAttester struct{ verdict attest.Verdict }
+
+func (a verdictAttester) Attest(_ context.Context, n node.Node) (attest.Result, error) {
+	return attest.Result{NodeID: n.ID, Verdict: a.verdict}, nil
+}
+
+func stepWorker(t *testing.T, m *Metrics, verdict attest.Verdict) {
+	t.Helper()
 	mach := &machine{}
 	w, err := provisioner.NewWorker(provisioner.Config{
 		Owner:        "worker-1",
@@ -97,10 +105,11 @@ func TestWorkerFeedsTheRegistry(t *testing.T) {
 		MaxAttempts:  3,
 		RetryBackoff: workerBackoff,
 	}, provisioner.Deps{
-		Store:   &oneNodeStore{n: node.Register(node.Spec{ID: "n1", Pod: "p1", Rack: "r1", BMC: "http://bmc.test"})},
-		Dial:    func(string) (provisioner.BMC, provisioner.Agent) { return mach, mach },
-		Clock:   &stepClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
-		Metrics: m.Provisioner(),
+		Store:    &oneNodeStore{n: node.Register(node.Spec{ID: "n1", Pod: "p1", Rack: "r1", BMC: "http://bmc.test"})},
+		Dial:     func(string) (provisioner.BMC, provisioner.Agent) { return mach, mach },
+		Attester: verdictAttester{verdict},
+		Clock:    &stepClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		Metrics:  m.Provisioner(),
 	})
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
@@ -109,6 +118,12 @@ func TestWorkerFeedsTheRegistry(t *testing.T) {
 	if worked, err := w.Step(context.Background()); !worked || err != nil {
 		t.Fatalf("Step = (%v, %v), want (true, nil)", worked, err)
 	}
+}
+
+func TestWorkerFeedsTheRegistry(t *testing.T) {
+	m := newTestMetrics(t, &fakeCounter{})
+
+	stepWorker(t, m, attest.VerdictPass)
 
 	gatherAndCompare(t, m, family("provisioner_tasks_total",
 		"Tasks run by provisioner workers, by task and outcome.", "counter",
@@ -116,6 +131,7 @@ func TestWorkerFeedsTheRegistry(t *testing.T) {
 	), "provisioner_tasks_total")
 	gatherAndCompare(t, m, family("provisioner_bmc_requests_total",
 		"BMC and agent call attempts, retries included.", "counter",
+		`provisioner_bmc_requests_total{op="attest",result="ok"} 1`,
 		`provisioner_bmc_requests_total{op="reset",result="ok"} 2`,
 		`provisioner_bmc_requests_total{op="set_pxe",result="ok"} 1`,
 		`provisioner_bmc_requests_total{op="set_pxe",result="transient"} 1`,
@@ -124,12 +140,18 @@ func TestWorkerFeedsTheRegistry(t *testing.T) {
 	), "provisioner_bmc_requests_total")
 	gatherAndCompare(t, m, family("provisioner_events_total",
 		"Lifecycle events applied by provisioner workers.", "counter",
+		`provisioner_events_total{event="attestation_failed"} 0`,
 		`provisioner_events_total{event="hardware_fault"} 0`,
 		`provisioner_events_total{event="inspection_failed"} 0`,
 		`provisioner_events_total{event="inspection_passed"} 1`,
 		`provisioner_events_total{event="start_inspection"} 1`,
 		`provisioner_events_total{event="wipe_failed"} 0`,
 	), "provisioner_events_total")
+	gatherAndCompare(t, m, family("attestations_total",
+		"Node attestations run by provisioner workers, by verdict.", "counter",
+		`attestations_total{verdict="fail"} 0`,
+		`attestations_total{verdict="pass"} 1`,
+	), "attestations_total")
 	gatherAndCompare(t, m, family("provisioner_task_duration_seconds",
 		"Time from the start of a task to its result, in seconds.", "histogram",
 		`provisioner_task_duration_seconds_bucket{task="inspect",le="1"} 0`,
@@ -145,4 +167,28 @@ func TestWorkerFeedsTheRegistry(t *testing.T) {
 		`provisioner_task_duration_seconds_sum{task="inspect"} 4.1`,
 		`provisioner_task_duration_seconds_count{task="inspect"} 1`,
 	), "provisioner_task_duration_seconds")
+}
+
+func TestWorkerCountsAFailedAttestationAndItsQuarantineEvent(t *testing.T) {
+	m := newTestMetrics(t, &fakeCounter{})
+
+	stepWorker(t, m, attest.VerdictFail)
+
+	gatherAndCompare(t, m, family("attestations_total",
+		"Node attestations run by provisioner workers, by verdict.", "counter",
+		`attestations_total{verdict="fail"} 1`,
+		`attestations_total{verdict="pass"} 0`,
+	), "attestations_total")
+	gatherAndCompare(t, m, family("provisioner_events_total",
+		"Lifecycle events applied by provisioner workers.", "counter",
+		`provisioner_events_total{event="attestation_failed"} 1`,
+		`provisioner_events_total{event="hardware_fault"} 0`,
+		`provisioner_events_total{event="inspection_failed"} 0`,
+		`provisioner_events_total{event="start_inspection"} 1`,
+		`provisioner_events_total{event="wipe_failed"} 0`,
+	), "provisioner_events_total")
+	gatherAndCompare(t, m, family("provisioner_tasks_total",
+		"Tasks run by provisioner workers, by task and outcome.", "counter",
+		`provisioner_tasks_total{outcome="failed",task="inspect"} 1`,
+	), "provisioner_tasks_total")
 }

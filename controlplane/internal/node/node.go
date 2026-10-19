@@ -10,13 +10,16 @@ import (
 // still be on the node's disks, so it survives quarantine and is only cleared
 // by a successful wipe. BMC is the base URL of the node's BMC; see
 // docs/bmc-protocol.md. Pod is the InfiniBand scalable unit the node's rack
-// belongs to; see docs/reservations.md. Reservation is the reservation the
-// node was provisioned for, if any; it is kept and cleared like Tenant.
+// belongs to; see docs/reservations.md. AKPub is the base64 attestation key
+// enrolled at racking; see docs/attestation.md. Reservation is the
+// reservation the node was provisioned for, if any; it is kept and cleared
+// like Tenant.
 type Node struct {
 	ID          string
 	Pod         string
 	Rack        string
 	BMC         string
+	AKPub       string
 	State       State
 	Tenant      string
 	Reservation string
@@ -24,10 +27,11 @@ type Node struct {
 
 // Spec describes a node being registered.
 type Spec struct {
-	ID   string
-	Pod  string
-	Rack string
-	BMC  string
+	ID    string
+	Pod   string
+	Rack  string
+	BMC   string
+	AKPub string
 }
 
 var (
@@ -43,7 +47,7 @@ var allStates = []State{
 }
 
 var allEvents = []Event{
-	EventStartInspection, EventInspectionPassed, EventInspectionFailed,
+	EventStartInspection, EventInspectionPassed, EventInspectionFailed, EventAttestationFailed,
 	EventProvision, EventProvisionSucceeded, EventProvisionFailed,
 	EventRelease, EventWipeSucceeded, EventWipeFailed,
 	EventHardwareFault, EventRepaired,
@@ -54,7 +58,7 @@ func States() []State { return slices.Clone(allStates) }
 
 // Register returns a freshly racked node.
 func Register(s Spec) Node {
-	return Node{ID: s.ID, Pod: s.Pod, Rack: s.Rack, BMC: s.BMC, State: StateRacked}
+	return Node{ID: s.ID, Pod: s.Pod, Rack: s.Rack, BMC: s.BMC, AKPub: s.AKPub, State: StateRacked}
 }
 
 // Apply returns the node after ev. tenant must be set for EventProvision

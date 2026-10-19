@@ -24,6 +24,7 @@ const (
 	EventStartInspection    Event = "start_inspection"
 	EventInspectionPassed   Event = "inspection_passed"
 	EventInspectionFailed   Event = "inspection_failed"
+	EventAttestationFailed  Event = "attestation_failed"
 	EventProvision          Event = "provision"
 	EventProvisionSucceeded Event = "provision_succeeded"
 	EventProvisionFailed    Event = "provision_failed"
@@ -44,9 +45,10 @@ var transitions = map[State]map[Event]State{
 		EventStartInspection: StateInspecting,
 	},
 	StateInspecting: {
-		EventInspectionPassed: StateAvailable,
-		EventInspectionFailed: StateQuarantined,
-		EventHardwareFault:    StateQuarantined,
+		EventInspectionPassed:  StateAvailable,
+		EventInspectionFailed:  StateQuarantined,
+		EventAttestationFailed: StateQuarantined,
+		EventHardwareFault:     StateQuarantined,
 	},
 	StateAvailable: {
 		EventProvision:     StateProvisioning,

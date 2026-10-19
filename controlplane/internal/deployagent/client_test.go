@@ -21,6 +21,7 @@ const (
 	testUser     = "agent-admin"
 	testPassword = "s3cret-pass"
 	testSystem   = "node-001"
+	testNonce    = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
 
 	shortTimeout = 20 * time.Millisecond
 )
@@ -129,6 +130,14 @@ func operations() []operation {
 		}},
 		{"Status", http.MethodGet, "/agent/" + testSystem + "/status", func(ctx context.Context, c *Client) error {
 			_, err := c.Status(ctx, testSystem)
+			return err
+		}},
+		{"Identity", http.MethodGet, "/agent/" + testSystem + "/identity", func(ctx context.Context, c *Client) error {
+			_, err := c.Identity(ctx, testSystem)
+			return err
+		}},
+		{"Evidence", http.MethodGet, "/agent/" + testSystem + "/attestation", func(ctx context.Context, c *Client) error {
+			_, err := c.Evidence(ctx, testSystem, testNonce)
 			return err
 		}},
 	}

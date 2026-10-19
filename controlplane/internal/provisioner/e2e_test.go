@@ -83,7 +83,7 @@ func (f *e2eFleet) runUntilSettled(t *testing.T) {
 			TaskTimeout:  2 * time.Second,
 			MaxAttempts:  8,
 			RetryBackoff: 2 * time.Millisecond,
-		}, Deps{Store: f.store, Dial: f.dial, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		}, Deps{Store: f.store, Dial: f.dial, Attester: passAttester{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 		if err != nil {
 			t.Fatalf("worker: %v", err)
 		}

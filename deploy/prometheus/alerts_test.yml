@@ -56,13 +56,15 @@ tests:
         alertname: GPUFatalXid
         exp_alerts: []
 
-  - name: QuarantineSpike counts the three quarantine causes together
+  - name: QuarantineSpike counts the four quarantine causes together
     interval: 1m
     input_series:
       - series: 'provisioner_events_total{event="hardware_fault"}'
         values: "0x9 3x20"
       - series: 'provisioner_events_total{event="inspection_failed"}'
-        values: "0x9 3x20"
+        values: "0x9 2x20"
+      - series: 'provisioner_events_total{event="attestation_failed"}'
+        values: "0x9 1x20"
       - series: 'provisioner_events_total{event="wipe_failed"}'
         values: "0x30"
       - series: 'provisioner_events_total{event="provision"}'
@@ -78,15 +80,37 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Nodes are being quarantined faster than expected"
-              description: "6 inspection_failed, wipe_failed and hardware_fault events in the last 15m (threshold 5)."
+              description: "6 inspection_failed, attestation_failed, wipe_failed and hardware_fault events in the last 15m (threshold 5)."
+
+  - name: QuarantineSpike fires on attestation failures alone
+    interval: 1m
+    input_series:
+      - series: 'provisioner_events_total{event="attestation_failed"}'
+        values: "0x9 6x20"
+      - series: 'provisioner_events_total{event="inspection_passed"}'
+        values: "0+50x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: QuarantineSpike
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: QuarantineSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Nodes are being quarantined faster than expected"
+              description: "6 inspection_failed, attestation_failed, wipe_failed and hardware_fault events in the last 15m (threshold 5)."
 
   - name: QuarantineSpike stays quiet at the threshold
     interval: 1m
     input_series:
       - series: 'provisioner_events_total{event="hardware_fault"}'
         values: "0x9 3x20"
+      - series: 'provisioner_events_total{event="attestation_failed"}'
+        values: "0x9 1x20"
       - series: 'provisioner_events_total{event="wipe_failed"}'
-        values: "0x9 2x20"
+        values: "0x9 1x20"
       - series: 'provisioner_events_total{event="provision"}'
         values: "0+50x30"
     alert_rule_test:
@@ -222,4 +246,66 @@ tests:
     alert_rule_test:
       - eval_time: 12m
         alertname: ReservationDegraded
+        exp_alerts: []
+
+  - name: AttestationFailure fires on a fail increase and resolves once it leaves the window
+    interval: 1m
+    input_series:
+      - series: 'attestations_total{verdict="fail", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0x5 1x45"
+      - series: 'attestations_total{verdict="pass", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0+3x50"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AttestationFailure
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: AttestationFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              verdict: fail
+              job: controlplane
+              instance: host.docker.internal:8080
+            exp_annotations:
+              summary: "A node failed tenant attestation"
+              description: "Failed attestations in the last 15m on host.docker.internal:8080: 1. Each failing node is quarantined as attestation_failed; the reasons are in the control plane log and in GET /v1/nodes/{id}/attestation."
+      - eval_time: 15m
+        alertname: AttestationFailure
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              verdict: fail
+              job: controlplane
+              instance: host.docker.internal:8080
+            exp_annotations:
+              summary: "A node failed tenant attestation"
+              description: "Failed attestations in the last 15m on host.docker.internal:8080: 1. Each failing node is quarantined as attestation_failed; the reasons are in the control plane log and in GET /v1/nodes/{id}/attestation."
+      - eval_time: 40m
+        alertname: AttestationFailure
+        exp_alerts: []
+
+  - name: AttestationFailure stays quiet on pass-only traffic
+    interval: 1m
+    input_series:
+      - series: 'attestations_total{verdict="pass", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0+2x40"
+      - series: 'attestations_total{verdict="fail", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AttestationFailure
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: AttestationFailure
+        exp_alerts: []
+
+  - name: AttestationFailure stays quiet across a control plane restart
+    interval: 1m
+    input_series:
+      - series: 'attestations_total{verdict="fail", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "3x9 0x30"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: AttestationFailure
         exp_alerts: []

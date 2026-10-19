@@ -1,0 +1,36 @@
+{
+  "version": "2026-10-19.1",
+  "components": {
+    "bmc": [
+      {
+        "name": "bmc-1.9.3",
+        "sha256": "e57296f1cfe8820d3688a261afab4807d36c2af653a930fed9044b3e726b32a6"
+      }
+    ],
+    "bootloader": [
+      {
+        "name": "grub-2.12",
+        "sha256": "c5f39b4ff89851e878f438de9608b53418c7c801964225c471e1e7f03ef7e5e1"
+      }
+    ],
+    "firmware": [
+      {
+        "name": "bios-2.4.1",
+        "sha256": "cac58046aac7cbd9a3d6b104fb0a9161f85d40500141b3c9419338f37e9e09a7"
+      }
+    ],
+    "kernel": [
+      {
+        "name": "inspect-ramdisk-6.8.0",
+        "sha256": "421894ce6317674386346ed73b795127420e70eb3b7e9698b336a2b2a8bce8ca"
+      }
+    ]
+  },
+  "gpu": {
+    "vendor_root_pub": "OU2+mTe4sYbtgYhZ80r0NnGqIqIL7oyeFSTSGIQ3XUo=",
+    "vbios": [
+      "96.00.9F.00.01"
+    ],
+    "require_cc_mode": true
+  }
+}

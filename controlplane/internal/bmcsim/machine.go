@@ -37,6 +37,8 @@ type Machine struct {
 	boot    BootOverride
 	pending Task
 
+	tampered TamperSet
+
 	task     Task
 	phase    Phase
 	doneAt   time.Time
@@ -52,6 +54,8 @@ func NewMachine(params Params, clock Clock, rng *rand.Rand) *Machine {
 		health: HealthOK,
 		boot:   BootOverride{Target: BootNone, Enabled: BootDisabled},
 		phase:  PhaseIdle,
+
+		tampered: TamperSet{},
 	}
 }
 

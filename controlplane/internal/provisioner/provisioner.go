@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/redfish"
@@ -30,6 +31,13 @@ type BMC interface {
 type Agent interface {
 	SetTask(ctx context.Context, id string, t deployagent.Task) error
 	Status(ctx context.Context, id string) (deployagent.Status, error)
+}
+
+// Attester verifies what a node booted. A node that fails verification comes
+// back as a Result with VerdictFail, not as an error; errors are for not
+// being able to tell, and wrap deployagent.ErrTransient when worth retrying.
+type Attester interface {
+	Attest(ctx context.Context, n node.Node) (attest.Result, error)
 }
 
 // Dial returns clients for a node's BMC base URL (node.Node.BMC).
@@ -85,6 +93,8 @@ func (c Config) validate() error {
 type Deps struct {
 	Store Store
 	Dial  Dial
+	// Attester is required: a node must not reach the pool unchecked.
+	Attester Attester
 	// Clock defaults to the wall clock.
 	Clock Clock
 	// Log defaults to slog.Default().
@@ -94,22 +104,26 @@ type Deps struct {
 }
 
 type Worker struct {
-	cfg     Config
-	store   Store
-	dial    Dial
-	clock   Clock
-	log     *slog.Logger
-	metrics Metrics
+	cfg      Config
+	store    Store
+	dial     Dial
+	attester Attester
+	clock    Clock
+	log      *slog.Logger
+	metrics  Metrics
 }
 
 func NewWorker(cfg Config, deps Deps) (*Worker, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	if deps.Store == nil || deps.Dial == nil {
-		return nil, fmt.Errorf("%w: Store and Dial are required", ErrInvalidConfig)
+	if deps.Store == nil || deps.Dial == nil || deps.Attester == nil {
+		return nil, fmt.Errorf("%w: Store, Dial and Attester are required", ErrInvalidConfig)
 	}
-	w := &Worker{cfg: cfg, store: deps.Store, dial: deps.Dial, clock: deps.Clock, log: deps.Log, metrics: deps.Metrics}
+	w := &Worker{
+		cfg: cfg, store: deps.Store, dial: deps.Dial, attester: deps.Attester,
+		clock: deps.Clock, log: deps.Log, metrics: deps.Metrics,
+	}
 	if w.clock == nil {
 		w.clock = wallClock{}
 	}

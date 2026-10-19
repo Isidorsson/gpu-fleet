@@ -8,6 +8,9 @@ CREATE TABLE nodes (
     pod              text NOT NULL,
     rack             text NOT NULL,
     bmc              text NOT NULL,
+    -- Base64 attestation public key, recorded at racking. It is never taken
+    -- from the node again; see docs/attestation.md.
+    ak_pub           text NOT NULL,
     state            text NOT NULL CHECK (state IN (
                          'racked', 'inspecting', 'available', 'provisioning',
                          'active', 'wiping', 'quarantined')),
@@ -81,7 +84,36 @@ CREATE TABLE reservation_nodes (
     EXCLUDE USING gist (node_id WITH =, period WITH &&)
 );
 
+-- Single-use challenges for attestation. A row is deleted when consumed, so
+-- replaying a nonce finds nothing. Rows that expire unconsumed are purged
+-- when the next nonce is issued.
+CREATE TABLE attestation_nonces (
+    nonce      text PRIMARY KEY,
+    node_id    text NOT NULL REFERENCES nodes (id),
+    expires_at timestamptz NOT NULL
+);
+
+CREATE INDEX attestation_nonces_expires_idx ON attestation_nonces (expires_at);
+
+-- Signed attestation results, kept as history. The signature covers
+-- attest.ResultMessage, which is built from every other column here.
+CREATE TABLE attestations (
+    id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    node_id             text NOT NULL REFERENCES nodes (id),
+    verdict             text NOT NULL CHECK (verdict IN ('pass', 'fail')),
+    reasons             text[] NOT NULL DEFAULT '{}',
+    nonce               text NOT NULL,
+    measurements_digest text NOT NULL,
+    reference_version   text NOT NULL,
+    attested_at         timestamptz NOT NULL,
+    signature           bytea NOT NULL
+);
+
+CREATE INDEX attestations_node_id_idx ON attestations (node_id, id);
+
 -- +goose Down
+DROP TABLE attestations;
+DROP TABLE attestation_nonces;
 DROP TABLE reservation_nodes;
 DROP TABLE reservations;
 DROP TABLE node_events;

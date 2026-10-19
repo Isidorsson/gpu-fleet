@@ -27,15 +27,31 @@ var workerConfig = provisioner.Config{
 	RetryBackoff: 500 * time.Millisecond,
 }
 
+type workerDeps struct {
+	db       *store.Postgres
+	metrics  provisioner.Metrics
+	attester provisioner.Attester
+	creds    bmcCredentials
+	log      *slog.Logger
+}
+
+// bmcCredentials come from BMC_USER and BMC_PASSWORD; the workers and the
+// attestation service share them.
+type bmcCredentials struct{ user, password string }
+
+func bmcCredentialsFromEnv() bmcCredentials {
+	return bmcCredentials{user: os.Getenv("BMC_USER"), password: os.Getenv("BMC_PASSWORD")}
+}
+
 // startWorkers runs PROVISIONER_WORKERS provisioner workers until ctx ends.
 // Each gets a unique owner so leases from this process and its replicas never
-// collide. BMC credentials come from BMC_USER and BMC_PASSWORD.
-func startWorkers(ctx context.Context, db *store.Postgres, m provisioner.Metrics, log *slog.Logger) (*sync.WaitGroup, error) {
+// collide.
+func startWorkers(ctx context.Context, d workerDeps) (*sync.WaitGroup, error) {
 	count, err := workerCount()
 	if err != nil {
 		return nil, err
 	}
-	user, password := os.Getenv("BMC_USER"), os.Getenv("BMC_PASSWORD")
+	user, password := d.creds.user, d.creds.password
 	if count > 0 && (user == "" || password == "") {
 		return nil, errors.New("BMC_USER and BMC_PASSWORD are required when workers are enabled")
 	}
@@ -51,17 +67,19 @@ func startWorkers(ctx context.Context, db *store.Postgres, m provisioner.Metrics
 	for i := range count {
 		cfg := workerConfig
 		cfg.Owner = fmt.Sprintf("%s/%d/%d", host, os.Getpid(), i)
-		w, err := provisioner.NewWorker(cfg, provisioner.Deps{Store: db, Dial: dial, Log: log, Metrics: m})
+		w, err := provisioner.NewWorker(cfg, provisioner.Deps{
+			Store: d.db, Dial: dial, Attester: d.attester, Log: d.log, Metrics: d.metrics,
+		})
 		if err != nil {
 			return nil, err
 		}
 		wg.Go(func() {
 			if err := w.Run(ctx); err != nil {
-				log.Error("worker stopped", "owner", cfg.Owner, "err", err)
+				d.log.Error("worker stopped", "owner", cfg.Owner, "err", err)
 			}
 		})
 	}
-	log.Info("provisioner workers started", "count", count)
+	d.log.Info("provisioner workers started", "count", count)
 	return &wg, nil
 }
 

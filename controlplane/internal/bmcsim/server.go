@@ -54,8 +54,13 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("POST /redfish/v1/Systems/{id}/Actions/ComputerSystem.Reset", s.machineRoute(s.resetSystem))
 	mux.HandleFunc("PUT /agent/{id}/task", s.machineRoute(s.putTask))
 	mux.HandleFunc("GET /agent/{id}/status", s.machineRoute(s.getStatus))
+	mux.HandleFunc("GET /agent/{id}/identity", s.machineRoute(s.getIdentity))
+	mux.HandleFunc("GET /agent/{id}/attestation", s.machineRoute(s.getAttestation))
 	mux.HandleFunc("POST /sim/systems/{id}/fault", s.simRoute(setHealth(HealthCritical)))
 	mux.HandleFunc("DELETE /sim/systems/{id}/fault", s.simRoute(setHealth(HealthOK)))
+	mux.HandleFunc("POST /sim/systems/{id}/tamper", s.simRoute(s.postTamper))
+	mux.HandleFunc("DELETE /sim/systems/{id}/tamper", s.simRoute(clearTamper))
+	mux.HandleFunc("GET /sim/vendor-root", s.getVendorRoot)
 	return s.authenticate(mux)
 }
 

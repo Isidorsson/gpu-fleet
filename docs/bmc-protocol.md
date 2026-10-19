@@ -96,3 +96,9 @@ Returns 204.
 - `ForceOff` aborts a running task: phase returns to `idle`. A finished
   phase (`succeeded`/`failed`) stays readable until the next power-on.
 - A machine with `Health: Critical` fails any running task.
+
+## Attestation endpoints
+
+`GET /agent/{id}/identity`, `GET /agent/{id}/attestation?nonce=` and the
+`/sim/systems/{id}/tamper` and `/sim/vendor-root` endpoints are specified in
+[attestation.md](attestation.md).

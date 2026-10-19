@@ -109,7 +109,7 @@
       "title": "Quarantined",
       "description": "Nodes currently in the quarantined state.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -151,7 +151,7 @@
       "title": "Unhealthy GPUs",
       "description": "GPUs reporting gpu_agent_gpu_healthy 0: uncorrected ECC errors or a fatal XID.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -181,6 +181,48 @@
           "refId": "A",
           "expr": "count(gpu_agent_gpu_healthy == 0) or vector(0)",
           "legendFormat": "unhealthy",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Attestation failures (24h)",
+      "description": "Nodes that failed tenant attestation over the last 24 hours. Each one is quarantined as attestation_failed.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "refId": "A",
+          "expr": "sum(increase(attestations_total{verdict=\"fail\"}[24h]))",
+          "legendFormat": "failed",
           "range": true,
           "instant": false
         }
@@ -222,7 +264,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "refId": "A",
-          "expr": "sum by (event) (increase(provisioner_events_total{event=~\"inspection_failed|wipe_failed|hardware_fault\"}[15m]))",
+          "expr": "sum by (event) (increase(provisioner_events_total{event=~\"inspection_failed|attestation_failed|wipe_failed|hardware_fault\"}[15m]))",
           "legendFormat": "{{event}}",
           "range": true,
           "instant": false

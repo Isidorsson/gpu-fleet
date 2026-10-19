@@ -3,6 +3,7 @@ package provisioner
 import (
 	"time"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/node"
 )
@@ -14,7 +15,8 @@ type Outcome string
 const (
 	// OutcomeSucceeded: the agent reported success and the node moved on.
 	OutcomeSucceeded Outcome = "succeeded"
-	// OutcomeFailed: the agent reported failure and the node moved on.
+	// OutcomeFailed: the agent reported failure, or attestation failed, and
+	// the node moved on.
 	OutcomeFailed Outcome = "failed"
 	// OutcomeFault: the node was quarantined through hardware_fault.
 	OutcomeFault Outcome = "fault"
@@ -23,8 +25,8 @@ const (
 	OutcomeAbandoned Outcome = "abandoned"
 )
 
-// BMCOp names the kind of BMC or agent call, independent of the argument: a
-// force restart and a force off are both OpReset.
+// BMCOp names the kind of BMC, agent or attestation call, independent of the
+// argument: a force restart and a force off are both OpReset.
 type BMCOp string
 
 const (
@@ -32,6 +34,7 @@ const (
 	OpSetPXE  BMCOp = "set_pxe"
 	OpReset   BMCOp = "reset"
 	OpStatus  BMCOp = "status"
+	OpAttest  BMCOp = "attest"
 )
 
 // CallResult is how one call attempt ended.
@@ -52,6 +55,9 @@ type Metrics interface {
 	// BMCRequest is called for every call attempt, retries included.
 	BMCRequest(op BMCOp, result CallResult)
 	EventApplied(ev node.Event)
+	// Attested is called once per completed attestation, whatever the
+	// verdict, not per call attempt.
+	Attested(v attest.Verdict)
 	// LeaseLost is called once per session abandoned because of a lost lease.
 	LeaseLost()
 }
@@ -61,6 +67,7 @@ type noopMetrics struct{}
 func (noopMetrics) TaskFinished(deployagent.Task, Outcome, time.Duration) {}
 func (noopMetrics) BMCRequest(BMCOp, CallResult)                          {}
 func (noopMetrics) EventApplied(node.Event)                               {}
+func (noopMetrics) Attested(attest.Verdict)                               {}
 func (noopMetrics) LeaseLost()                                            {}
 
 func resultOf(err error) CallResult {

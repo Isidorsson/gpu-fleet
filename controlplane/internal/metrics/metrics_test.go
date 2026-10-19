@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/provisioner"
 )
@@ -35,6 +36,7 @@ func recordOneOfEverything(m *Metrics) {
 	p.TaskFinished(deployagent.TaskInspect, provisioner.OutcomeSucceeded, 0)
 	p.BMCRequest(provisioner.OpStatus, provisioner.ResultOK)
 	p.EventApplied("inspection_passed")
+	p.Attested(attest.VerdictPass)
 	p.LeaseLost()
 }
 
@@ -58,6 +60,9 @@ func TestHandlerServesAllFamilies(t *testing.T) {
 		"# TYPE provisioner_task_duration_seconds histogram",
 		"# TYPE provisioner_bmc_requests_total counter",
 		"# TYPE provisioner_events_total counter",
+		"# TYPE attestations_total counter",
+		`attestations_total{verdict="pass"} 1`,
+		`attestations_total{verdict="fail"} 0`,
 		"# TYPE provisioner_lease_lost_total counter",
 		"# TYPE go_goroutines gauge",
 		"# TYPE process_start_time_seconds gauge",
@@ -80,7 +85,7 @@ func TestHandlerKeepsServingOtherFamiliesWhenFleetQueryFails(t *testing.T) {
 	if strings.Contains(body, "fleet_nodes") {
 		t.Error("fleet_nodes served although its query failed")
 	}
-	for _, want := range []string{"provisioner_tasks_total", "provisioner_lease_lost_total", "go_goroutines"} {
+	for _, want := range []string{"provisioner_tasks_total", "attestations_total", "provisioner_lease_lost_total", "go_goroutines"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("scrape is missing %q", want)
 		}

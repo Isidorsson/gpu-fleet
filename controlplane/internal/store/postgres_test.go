@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -83,11 +85,17 @@ func execAdmin(t *testing.T, url, sql string) {
 
 func testBMC(id string) string { return "http://" + id + ".bmc.test:8443" }
 
+// testAK is a distinct, well-formed base64 32-byte key per node id.
+func testAK(id string) string {
+	sum := sha256.Sum256([]byte("ak/" + id))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
 func register(t *testing.T, p *Postgres, id string) { registerAt(t, p, id, "p1", "r1") }
 
 func registerAt(t *testing.T, p *Postgres, id, pod, rack string) {
 	t.Helper()
-	if err := p.Register(context.Background(), node.Register(node.Spec{ID: id, Pod: pod, Rack: rack, BMC: testBMC(id)})); err != nil {
+	if err := p.Register(context.Background(), node.Register(node.Spec{ID: id, Pod: pod, Rack: rack, BMC: testBMC(id), AKPub: testAK(id)})); err != nil {
 		t.Fatalf("register %s: %v", id, err)
 	}
 }
@@ -132,8 +140,8 @@ func TestRegisterAndGet(t *testing.T) {
 	p := openTestStore(t)
 	ctx := context.Background()
 
-	want := node.Node{ID: "n1", Pod: "p3", Rack: "r7", BMC: "https://10.0.0.7:8443", State: node.StateRacked}
-	if err := p.Register(ctx, node.Register(node.Spec{ID: want.ID, Pod: want.Pod, Rack: want.Rack, BMC: want.BMC})); err != nil {
+	want := node.Node{ID: "n1", Pod: "p3", Rack: "r7", BMC: "https://10.0.0.7:8443", AKPub: testAK("n1"), State: node.StateRacked}
+	if err := p.Register(ctx, node.Register(node.Spec{ID: want.ID, Pod: want.Pod, Rack: want.Rack, BMC: want.BMC, AKPub: want.AKPub})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	got, err := p.Get(ctx, "n1")
@@ -199,7 +207,7 @@ func TestPodRoundTripsThroughListClaimAndTransition(t *testing.T) {
 func TestRegisterDuplicateConflicts(t *testing.T) {
 	p := openTestStore(t)
 	register(t, p, "n1")
-	err := p.Register(context.Background(), node.Register(node.Spec{ID: "n1", Pod: "p1", Rack: "r1", BMC: testBMC("n1")}))
+	err := p.Register(context.Background(), node.Register(node.Spec{ID: "n1", Pod: "p1", Rack: "r1", BMC: testBMC("n1"), AKPub: testAK("n1")}))
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("second register: err = %v, want ErrConflict", err)
 	}

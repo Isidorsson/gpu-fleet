@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/redfish"
@@ -97,6 +98,7 @@ type fakeStore struct {
 	renews   int
 
 	onRenew  func(call int)
+	onApply  func(ev node.Event)
 	claimErr error
 	applyErr error
 }
@@ -210,6 +212,12 @@ func (s *fakeStore) ReleaseLease(ctx context.Context, id, owner string) error {
 }
 
 func (s *fakeStore) ApplyEventAsOwner(_ context.Context, id, owner string, ev node.Event, tenant string) (node.Node, error) {
+	s.mu.Lock()
+	hook := s.onApply
+	s.mu.Unlock()
+	if hook != nil {
+		hook(ev)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.applyErr != nil {
@@ -353,4 +361,47 @@ func (m *fakeMachine) controlCalls() []string {
 		}
 	}
 	return out
+}
+
+// passAttester passes every node.
+type passAttester struct{}
+
+func (passAttester) Attest(_ context.Context, n node.Node) (attest.Result, error) {
+	return attest.Result{NodeID: n.ID, Verdict: attest.VerdictPass}, nil
+}
+
+// fakeAttester passes every node unless results are queued. It logs "attest"
+// into the machine's call log, so tests can assert its position among the BMC
+// calls, and takes errors from the same queue (machine.failNext("attest", ...)).
+type fakeAttester struct {
+	m       *fakeMachine
+	results []attest.Result
+	nodes   []node.Node
+	// onAttest runs on every call, before the result or error is returned.
+	onAttest func()
+}
+
+func newFakeAttester(m *fakeMachine) *fakeAttester { return &fakeAttester{m: m} }
+
+// queue makes the next calls that do not fail return res, in order.
+func (a *fakeAttester) queue(res ...attest.Result) { a.results = append(a.results, res...) }
+
+func (a *fakeAttester) Attest(_ context.Context, n node.Node) (attest.Result, error) {
+	a.m.mu.Lock()
+	a.nodes = append(a.nodes, n)
+	err := a.m.do("attest")
+	hook := a.onAttest
+	a.m.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	if err != nil {
+		return attest.Result{}, err
+	}
+	if len(a.results) == 0 {
+		return attest.Result{NodeID: n.ID, Verdict: attest.VerdictPass}, nil
+	}
+	res := a.results[0]
+	a.results = a.results[1:]
+	return res, nil
 }

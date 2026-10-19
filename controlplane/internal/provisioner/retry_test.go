@@ -20,6 +20,7 @@ func TestTransientErrorsAreRetriedWithDoublingBackoff(t *testing.T) {
 		{"pxe_once", redfish.ErrTransient},
 		{"reset:ForceRestart", fmt.Errorf("post: %w", redfish.ErrTransient)},
 		{"status", fmt.Errorf("get: %w", deployagent.ErrTransient)},
+		{"attest", fmt.Errorf("fetch evidence: %w", deployagent.ErrTransient)},
 		{"reset:ForceOff", redfish.ErrTransient},
 	}
 	for _, tc := range tests {
@@ -82,6 +83,7 @@ func TestNonTransientErrorQuarantinesImmediately(t *testing.T) {
 		{"pxe_once", redfish.ErrNotFound},
 		{"reset:ForceRestart", errors.New("boom")},
 		{"status", deployagent.ErrNotFound},
+		{"attest", errors.New("boom")},
 		{"reset:ForceOff", redfish.ErrUnauthorized},
 	}
 	for _, tc := range tests {

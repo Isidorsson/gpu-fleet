@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	pgUniqueViolation    = "23505"
-	pgExclusionViolation = "23P01"
+	pgUniqueViolation     = "23505"
+	pgForeignKeyViolation = "23503"
+	pgExclusionViolation  = "23P01"
 )
 
 //go:embed migrations/*.sql
@@ -85,8 +86,8 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 
 func (p *Postgres) Register(ctx context.Context, n node.Node) error {
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO nodes (id, pod, rack, bmc, state, tenant) VALUES ($1, $2, $3, $4, $5, nullif($6, ''))`,
-		n.ID, n.Pod, n.Rack, n.BMC, string(n.State), n.Tenant)
+		`INSERT INTO nodes (id, pod, rack, bmc, ak_pub, state, tenant) VALUES ($1, $2, $3, $4, $5, $6, nullif($7, ''))`,
+		n.ID, n.Pod, n.Rack, n.BMC, n.AKPub, string(n.State), n.Tenant)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pgUniqueViolation {
 		return fmt.Errorf("%w: %s", ErrConflict, n.ID)
 	}
@@ -97,7 +98,7 @@ func (p *Postgres) Register(ctx context.Context, n node.Node) error {
 }
 
 const (
-	nodeColumns = `id, pod, rack, bmc, state, coalesce(tenant, ''), coalesce(reservation_id, '')`
+	nodeColumns = `id, pod, rack, bmc, ak_pub, state, coalesce(tenant, ''), coalesce(reservation_id, '')`
 	selectNode  = `SELECT ` + nodeColumns + ` FROM nodes`
 )
 
@@ -176,7 +177,7 @@ func getOne[T any](ctx context.Context, q querier, sql, id string, scan pgx.RowT
 
 // nodeDests lists scan targets for nodeColumns, in order.
 func nodeDests(n *node.Node, state *string) []any {
-	return []any{&n.ID, &n.Pod, &n.Rack, &n.BMC, state, &n.Tenant, &n.Reservation}
+	return []any{&n.ID, &n.Pod, &n.Rack, &n.BMC, &n.AKPub, state, &n.Tenant, &n.Reservation}
 }
 
 func scanNode(row pgx.CollectableRow) (node.Node, error) {

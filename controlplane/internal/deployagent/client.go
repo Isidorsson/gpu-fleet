@@ -7,14 +7,18 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"gpu-fleet/controlplane/internal/attest"
 )
 
 const (
 	defaultTimeout = 10 * time.Second
 
-	agentPath    = "/agent"
-	taskSuffix   = "/task"
-	statusSuffix = "/status"
+	agentPath         = "/agent"
+	taskSuffix        = "/task"
+	statusSuffix      = "/status"
+	identitySuffix    = "/identity"
+	attestationSuffix = "/attestation"
 )
 
 type Client struct {
@@ -66,6 +70,39 @@ func (c *Client) Status(ctx context.Context, id string) (Status, error) {
 	return st, nil
 }
 
+// Identity returns the node's base64 attestation public key. It is meant for
+// enrolment at racking time only; the control plane never trusts a key the
+// node offers after that.
+func (c *Client) Identity(ctx context.Context, id string) (string, error) {
+	path, err := agentURLPath(id, identitySuffix)
+	if err != nil {
+		return "", err
+	}
+	var w identityWire
+	if err := c.do(ctx, http.MethodGet, path, nil, &w); err != nil {
+		return "", err
+	}
+	if w.AKPub == "" {
+		return "", fmt.Errorf("parse GET %s: empty ak_pub", path)
+	}
+	return w.AKPub, nil
+}
+
+// Evidence fetches a signed quote and GPU reports bound to nonce. A node that
+// is powered off answers 409, which is a plain error: retrying cannot help.
+func (c *Client) Evidence(ctx context.Context, id, nonce string) (attest.Evidence, error) {
+	path, err := agentURLPath(id, attestationSuffix)
+	if err != nil {
+		return attest.Evidence{}, err
+	}
+	path += "?nonce=" + url.QueryEscape(nonce)
+	var ev attest.Evidence
+	if err := c.do(ctx, http.MethodGet, path, nil, &ev); err != nil {
+		return attest.Evidence{}, err
+	}
+	return ev, nil
+}
+
 func agentURLPath(id, suffix string) (string, error) {
 	if id == "" || id == "." || id == ".." {
 		return "", fmt.Errorf("invalid system id %q", id)
@@ -75,6 +112,10 @@ func agentURLPath(id, suffix string) (string, error) {
 
 type taskBody struct {
 	Task Task `json:"task"`
+}
+
+type identityWire struct {
+	AKPub string `json:"ak_pub"`
 }
 
 type statusWire struct {
