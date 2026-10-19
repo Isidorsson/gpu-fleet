@@ -1,7 +1,12 @@
-# Local dev stack. The control plane runs on the host and is scraped through
-# host.docker.internal; Alertmanager posts remediation webhooks back to it.
-# Agents run here on the fake GPU backend, one per simulated host, all behind
-# the DNS name `agent`.
+# Local dev stack. By default the control plane runs on the host and is scraped
+# through host.docker.internal; Alertmanager posts remediation webhooks back to
+# it. Agents run here on the fake GPU backend, one per simulated host, all
+# behind the DNS name `agent`.
+#
+# The `demo` profile adds the control plane, bmcsim and chaos as containers
+# (docs/demo.md). The control plane publishes :8080, so Prometheus and
+# Alertmanager reach it through host.docker.internal exactly as before; do not
+# run a host control plane at the same time.
 x-agent: &agent
   build:
     context: ../agent
@@ -10,6 +15,12 @@ x-agent: &agent
   networks:
     default:
       aliases: [agent]
+
+# One Dockerfile for the three Go binaries. The context is the repository root
+# so the image can carry deploy/attestation/reference.json.
+x-gobin: &gobin
+  dockerfile: controlplane/Dockerfile
+  context: ..
 
 services:
   postgres:
@@ -79,6 +90,52 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports: ["3000:3000"]
     depends_on: [prometheus]
+
+  # Demo profile. Every value below is dev-only, like the Postgres password.
+  # The images are distroless (no shell), so there are no container
+  # healthchecks; the restart policies absorb startup ordering races instead.
+  controlplane:
+    profiles: [demo]
+    build:
+      <<: *gobin
+      args: {CMD: controlplane}
+    image: gpu-fleet-controlplane:dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://fleet:fleet-dev-only@postgres:5432/fleet?sslmode=disable"
+      BMC_USER: sim
+      BMC_PASSWORD: sim-dev-only
+      # base64 of the 32 bytes "demo-only-attest-signing-key-001"
+      ATTEST_SIGNING_KEY: ZGVtby1vbmx5LWF0dGVzdC1zaWduaW5nLWtleS0wMDE=
+      ATTEST_REFERENCE: /etc/gpu-fleet/reference.json
+      REMEDIATION_WEBHOOK_TOKEN: remediation-dev-only
+    ports: ["8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  bmcsim:
+    profiles: [demo]
+    build:
+      <<: *gobin
+      args: {CMD: bmcsim}
+    image: gpu-fleet-bmcsim:dev
+    environment:
+      BMCSIM_USER: sim
+      BMCSIM_PASSWORD: sim-dev-only
+    ports: ["8443:8443"]
+
+  chaos:
+    profiles: [demo]
+    build:
+      <<: *gobin
+      args: {CMD: chaos}
+    image: gpu-fleet-chaos:dev
+    restart: unless-stopped
+    environment:
+      BMCSIM_USER: sim
+      BMCSIM_PASSWORD: sim-dev-only
+    depends_on: [controlplane, bmcsim]
 
 volumes:
   pgdata:

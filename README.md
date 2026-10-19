@@ -6,9 +6,37 @@ reservations and GPU health, runnable on a laptop against a simulated fleet.
 ```
 controlplane/   Go: lifecycle state machine, provisioning + capacity APIs
 agent/          Rust: per-node GPU health agent (NVML, fake backend for dev)
-deploy/         docker compose: Postgres, GPU agents, Prometheus + alerts, Alertmanager, Grafana
+deploy/         docker compose: Postgres, GPU agents, Prometheus + alerts, Alertmanager, Grafana, demo profile
 docs/adr/       architecture decision records
 ```
+
+## Quick demo
+
+```bash
+docker compose -f deploy/compose.yaml --profile demo up -d --build
+```
+
+Needs Docker with Compose v2 and free host ports 3000, 5432, 8080, 8443, 9090,
+9093 and 19401 to 19404 (stop a host-run control plane first, it also uses
+8080). The first run builds the Go and Rust images, which takes a few minutes.
+
+It starts everything in containers and keeps it busy: a simulated 50-node
+fleet is racked, inspected and attested (a few minutes), tenants book
+reservations, and a chaos service plants implants and GPU faults that the
+platform catches and repairs on its own. Contract: [docs/demo.md](docs/demo.md).
+
+- Grafana, anonymous, opens on the GPU Fleet dashboard: http://localhost:3000
+- Prometheus and its alerts: http://localhost:9090
+- Alertmanager: http://localhost:9093
+- Control plane API: `curl -s localhost:8080/v1/capacity`
+- What the chaos service is doing:
+  `docker compose -f deploy/compose.yaml --profile demo logs -f chaos`
+
+Stop it with `docker compose -f deploy/compose.yaml --profile demo down -v`.
+The fleet is stored in the `pgdata` volume while bmcsim keeps its state in
+memory, so drop the volume (`-v`) to start the next run clean. The
+`demo-smoke` CI job runs the `up` command and waits until 40 nodes are
+`available`.
 
 ## Node lifecycle
 
@@ -162,6 +190,8 @@ This starts Postgres, Prometheus, Alertmanager, Grafana and four GPU agents
 `node-004`), all on the fake GPU backend. The control plane runs on the host.
 Start only the observability side with
 `docker compose -f deploy/compose.yaml up -d prometheus alertmanager grafana`.
+To run the control plane, bmcsim and chaos in containers too, see
+[Quick demo](#quick-demo).
 
 Simulated fleet (50 nodes, 5% inspection failures, 1% flaky BMC requests):
 

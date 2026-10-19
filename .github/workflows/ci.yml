@@ -94,3 +94,36 @@ jobs:
           panels = [p for p in dashboard["panels"] if p["type"] != "row"]
           assert panels and all(p["datasource"] == want and p["targets"] for p in panels)
           PY
+
+  demo-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MIN_HEALTHY: "40"
+      WAIT_SECONDS: "360"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Start the demo profile
+        run: docker compose -f deploy/compose.yaml --profile demo up -d --build
+      - name: Wait for the fleet to pass inspection and attestation
+        run: |
+          deadline=$((SECONDS + WAIT_SECONDS))
+          while (( SECONDS < deadline )); do
+            available=$(curl -fsS --max-time 5 localhost:8080/metrics 2>/dev/null \
+              | awk '/^fleet_nodes\{state="(available|provisioning|active)"\}/ { s += $2 } END { if (NR) print int(s) }' || true)
+            echo "nodes past inspection (available, provisioning or active): ${available:-n/a} (want >= $MIN_HEALTHY)"
+            if [[ -n "$available" ]] && (( available >= MIN_HEALTHY )); then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "fewer than $MIN_HEALTHY nodes passed inspection after ${WAIT_SECONDS}s" >&2
+          exit 1
+      - name: Logs
+        if: failure()
+        run: |
+          docker compose -f deploy/compose.yaml --profile demo ps -a
+          docker compose -f deploy/compose.yaml --profile demo logs --no-color --tail 300 chaos controlplane
+      - name: Tear down
+        if: always()
+        run: docker compose -f deploy/compose.yaml --profile demo down -v

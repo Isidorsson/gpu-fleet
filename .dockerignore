@@ -1,0 +1,8 @@
+# Allowlist: the Go images need only the module and the attestation reference
+# values. Everything else (agent/target, .git, docs, scratch output) stays out
+# of the build context.
+*
+!controlplane/
+!deploy/attestation/reference.json
+controlplane/bin/
+**/*.exe
