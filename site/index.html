@@ -129,7 +129,7 @@ section > header { display: grid; gap: 8px; }
 
 /* Architecture */
 .arch { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
-.arch pre { margin: 0; min-width: 720px; }
+.arch pre { margin: 0; display: flex; justify-content: center; }
 .arch svg { max-width: none !important; height: auto; }
 
 /* Try it */
@@ -234,7 +234,7 @@ img { max-width: 100%; }
     </header>
     <div class="arch">
 <pre class="mermaid">
-flowchart LR
+flowchart TB
   agent["gpu-agent (Rust)<br/>dcgm-exporter metrics"] -->|scrape| prom[Prometheus]
   prom -->|GPUFatalXid| am[Alertmanager]
   am -->|webhook| cp["control plane (Go)"]
