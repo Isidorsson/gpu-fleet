@@ -9,13 +9,23 @@ import (
 // Node is a bare-metal machine. Tenant is set while that tenant's data may
 // still be on the node's disks, so it survives quarantine and is only cleared
 // by a successful wipe. BMC is the base URL of the node's BMC; see
-// docs/bmc-protocol.md.
+// docs/bmc-protocol.md. Pod is the InfiniBand scalable unit the node's rack
+// belongs to; see docs/reservations.md.
 type Node struct {
 	ID     string
+	Pod    string
 	Rack   string
 	BMC    string
 	State  State
 	Tenant string
+}
+
+// Spec describes a node being registered.
+type Spec struct {
+	ID   string
+	Pod  string
+	Rack string
+	BMC  string
 }
 
 var (
@@ -41,8 +51,8 @@ var allEvents = []Event{
 func States() []State { return slices.Clone(allStates) }
 
 // Register returns a freshly racked node.
-func Register(id, rack, bmc string) Node {
-	return Node{ID: id, Rack: rack, BMC: bmc, State: StateRacked}
+func Register(s Spec) Node {
+	return Node{ID: s.ID, Pod: s.Pod, Rack: s.Rack, BMC: s.BMC, State: StateRacked}
 }
 
 // Apply returns the node after ev. tenant must be set for EventProvision

@@ -165,3 +165,61 @@ tests:
             exp_annotations:
               summary: "GPU agent on node-a has stopped sampling"
               description: "The agent on node-a last sampled its GPUs 3m 30s ago."
+
+  - name: ReservationDegraded fires on an increase and resolves once it leaves the window
+    interval: 1m
+    input_series:
+      - series: 'reservation_degraded_total{job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0x5 1x45"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ReservationDegraded
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ReservationDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: controlplane
+              instance: host.docker.internal:8080
+            exp_annotations:
+              summary: "A reservation started with fewer nodes than requested"
+              description: "Degraded reservation starts in the last 15m: 1. A quarantined node could not be replaced within the reservation's placement policy."
+      - eval_time: 15m
+        alertname: ReservationDegraded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: controlplane
+              instance: host.docker.internal:8080
+            exp_annotations:
+              summary: "A reservation started with fewer nodes than requested"
+              description: "Degraded reservation starts in the last 15m: 1. A quarantined node could not be replaced within the reservation's placement policy."
+      - eval_time: 40m
+        alertname: ReservationDegraded
+        exp_alerts: []
+
+  - name: ReservationDegraded stays quiet without new degraded reservations
+    interval: 1m
+    input_series:
+      - series: 'reservation_degraded_total{job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0x40"
+      - series: 'reservation_degraded_total{job="controlplane", instance="other:8080"}'
+        values: "4x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ReservationDegraded
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ReservationDegraded
+        exp_alerts: []
+
+  - name: ReservationDegraded stays quiet across a control plane restart
+    interval: 1m
+    input_series:
+      - series: 'reservation_degraded_total{job="controlplane", instance="host.docker.internal:8080"}'
+        values: "3x9 0x30"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ReservationDegraded
+        exp_alerts: []

@@ -2,7 +2,7 @@
   "id": null,
   "uid": "gpu-fleet",
   "title": "GPU Fleet",
-  "description": "Node lifecycle, provisioning and GPU health. Metric contract: docs/metrics.md.",
+  "description": "Node lifecycle, capacity reservations, provisioning and GPU health. Metric contract: docs/metrics.md.",
   "tags": ["gpu-fleet"],
   "schemaVersion": 41,
   "version": 1,
@@ -230,11 +230,203 @@
       ]
     },
     {
+      "id": 14,
+      "type": "row",
+      "title": "Capacity",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "bargauge",
+      "title": "Free nodes by pod",
+      "description": "Nodes free right now and for the next minute, per pod. Red: no free capacity.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "refId": "A",
+          "expr": "capacity_free_nodes",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Reservations by status",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 6, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 1,
+            "fillOpacity": 50,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "scheduled" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "active" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "degraded" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ended" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "cancelled" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "gray" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "refId": "A",
+          "expr": "sum by (status) (reservations)",
+          "legendFormat": "{{status}}",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Placement failures",
+      "description": "Reservation requests rejected for insufficient capacity, per second by policy.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 14, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "refId": "A",
+          "expr": "sum by (policy) (rate(placement_failures_total[5m]))",
+          "legendFormat": "{{policy}}",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Degraded reservations (24h)",
+      "description": "Reservations that started with fewer nodes than requested, over the last 24 hours.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 4, "x": 20, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "refId": "A",
+          "expr": "increase(reservation_degraded_total[24h])",
+          "legendFormat": "degraded",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
       "id": 6,
       "type": "row",
       "title": "Provisioning",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
       "panels": []
     },
     {
@@ -243,7 +435,7 @@
       "title": "Task duration p50 / p95",
       "description": "Task start to result, per task type.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -296,7 +488,7 @@
       "title": "Task outcomes",
       "description": "Tasks finished per second by task and outcome.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
@@ -336,7 +528,7 @@
       "title": "BMC error ratio",
       "description": "Share of BMC and agent call attempts that were not ok (transient or error), retries included.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
@@ -376,7 +568,7 @@
       "type": "row",
       "title": "GPUs",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
       "panels": []
     },
     {
@@ -384,7 +576,7 @@
       "type": "timeseries",
       "title": "GPU temperature",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 19 },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 28 },
       "fieldConfig": {
         "defaults": {
           "unit": "celsius",
@@ -430,7 +622,7 @@
       "type": "timeseries",
       "title": "Power per host",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
       "fieldConfig": {
         "defaults": {
           "unit": "watt",
@@ -470,7 +662,7 @@
       "title": "Latest XIDs",
       "description": "GPUs whose most recent XID code is non-zero.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
       "fieldConfig": {
         "defaults": {
           "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "inspect": false }

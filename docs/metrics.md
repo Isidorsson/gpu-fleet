@@ -76,6 +76,17 @@ Label values:
 - `event`: any `node.Event` value
 - `state`: any `node.State` value
 
+## Capacity (control plane)
+
+Same `/metrics` endpoint. See [reservations.md](reservations.md).
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `capacity_free_nodes` | gauge | `pod` | computed at scrape time from `FreeCandidates(now, now+1m)`; one series per pod that has any node |
+| `reservations` | gauge | `status` | computed at scrape time with `CountReservationsByStatus`; all 5 statuses always present |
+| `placement_failures_total` | counter | `policy` | requests rejected for insufficient capacity; all 3 policies pre-initialized to 0 |
+| `reservation_degraded_total` | counter | | reservations that started with fewer nodes than requested |
+
 ## Scrape config
 
 | Job | Targets |
@@ -98,6 +109,15 @@ Label values:
 | Power per host | time series | `sum by (Hostname) (DCGM_FI_DEV_POWER_USAGE)` |
 | Latest XIDs | table | `DCGM_FI_DEV_XID_ERRORS > 0` (any code; fatality is `gpu_agent_gpu_healthy`) |
 
+Row "Capacity" (between Fleet and Provisioning):
+
+| Panel | Type | Query |
+|---|---|---|
+| Free nodes by pod | bar gauge | `capacity_free_nodes` by `pod` |
+| Reservations by status | time series, stacked | `sum by (status) (reservations)` |
+| Placement failures | time series | `sum by (policy) (rate(placement_failures_total[5m]))` |
+| Degraded reservations (24h) | stat | `increase(reservation_degraded_total[24h])` |
+
 ## Alerts
 
 | Alert | Expr | For | Severity |
@@ -107,3 +127,4 @@ Label values:
 | `GPUAgentDown` | `up{job="gpu-agent"} == 0` | 2m | warning |
 | `GPUAgentStale` | `time() - gpu_agent_last_sample_timestamp_seconds > 60` | 2m | warning |
 | `ControlPlaneDown` | `up{job="controlplane"} == 0` | 2m | critical |
+| `ReservationDegraded` | `increase(reservation_degraded_total[15m]) > 0` | 0m | warning |

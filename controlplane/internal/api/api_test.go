@@ -19,6 +19,8 @@ import (
 )
 
 type fakeStore struct {
+	fakeReservations
+
 	mu     sync.Mutex
 	nodes  map[string]node.Node
 	events map[string][]store.EventRecord
@@ -26,7 +28,11 @@ type fakeStore struct {
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{nodes: map[string]node.Node{}, events: map[string][]store.EventRecord{}}
+	return &fakeStore{
+		fakeReservations: newFakeReservations(),
+		nodes:            map[string]node.Node{},
+		events:           map[string][]store.EventRecord{},
+	}
 }
 
 func (f *fakeStore) Register(_ context.Context, n node.Node) error {
@@ -91,9 +97,24 @@ func (f *fakeStore) Events(_ context.Context, id string) ([]store.EventRecord, e
 	return f.events[id], nil
 }
 
-func newTestServer(t *testing.T, fs *fakeStore) *httptest.Server {
+func testDeps(fs *fakeStore) Deps {
+	return Deps{
+		Store:     fs,
+		Place:     fakePlace,
+		Summarize: (&fakeSummarizer{}).summarize,
+		Now:       func() time.Time { return testNow },
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+// newTestServer serves the API over fs; mutate may replace any dependency.
+func newTestServer(t *testing.T, fs *fakeStore, mutate ...func(*Deps)) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(NewHandler(fs, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	deps := testDeps(fs)
+	for _, m := range mutate {
+		m(&deps)
+	}
+	srv := httptest.NewServer(NewHandler(deps))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -120,14 +141,14 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (int, map
 
 const (
 	testBMC    = "http://10.0.0.1:8443"
-	gpu001Body = `{"id":"gpu-001","rack":"r1","bmc":"` + testBMC + `"}`
+	gpu001Body = `{"id":"gpu-001","pod":"p1","rack":"r1","bmc":"` + testBMC + `"}`
 )
 
 func TestRegisterNode(t *testing.T) {
 	srv := newTestServer(t, newFakeStore())
 	status, body := do(t, srv, http.MethodPost, "/v1/nodes", gpu001Body)
-	if status != http.StatusCreated || body["state"] != "racked" || body["bmc"] != testBMC {
-		t.Fatalf("register = %d %v, want 201 racked with bmc %s", status, body, testBMC)
+	if status != http.StatusCreated || body["state"] != "racked" || body["bmc"] != testBMC || body["pod"] != "p1" {
+		t.Fatalf("register = %d %v, want 201 racked in pod p1 with bmc %s", status, body, testBMC)
 	}
 	status, _ = do(t, srv, http.MethodPost, "/v1/nodes", gpu001Body)
 	if status != http.StatusConflict {
@@ -153,6 +174,21 @@ func TestRegisteredBMCIsReturnedByGetAndList(t *testing.T) {
 	}
 }
 
+func TestRegisteredPodIsReturnedByGetAndList(t *testing.T) {
+	srv := newTestServer(t, newFakeStore())
+	do(t, srv, http.MethodPost, "/v1/nodes", gpu001Body)
+
+	_, got := do(t, srv, http.MethodGet, "/v1/nodes/gpu-001", "")
+	if got["pod"] != "p1" || got["rack"] != "r1" {
+		t.Fatalf("get = %v, want pod p1 rack r1", got)
+	}
+	_, list := do(t, srv, http.MethodGet, "/v1/nodes", "")
+	nodes, _ := list["nodes"].([]any)
+	if first, _ := nodes[0].(map[string]any); len(nodes) != 1 || first["pod"] != "p1" {
+		t.Fatalf("list = %v, want the node in pod p1", list)
+	}
+}
+
 func TestRegisterNodeValidation(t *testing.T) {
 	srv := newTestServer(t, newFakeStore())
 	tests := []struct {
@@ -160,10 +196,13 @@ func TestRegisterNodeValidation(t *testing.T) {
 		want int
 	}{
 		{`not json`, http.StatusBadRequest},
-		{`{"id":"gpu-001","rack":"r1","bmc":"http://h","extra":1}`, http.StatusBadRequest},
-		{`{"id":"","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
-		{`{"id":"has space","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
-		{`{"id":"gpu-001","rack":"","bmc":"http://h"}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"p1","rack":"r1","bmc":"http://h","extra":1}`, http.StatusBadRequest},
+		{`{"id":"","pod":"p1","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
+		{`{"id":"has space","pod":"p1","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"p1","rack":"","bmc":"http://h"}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"p1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","pod":"","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
+		{`{"id":"gpu-001","rack":"r1","bmc":"http://h"}`, http.StatusUnprocessableEntity},
 	}
 	for _, tt := range tests {
 		if status, body := do(t, srv, http.MethodPost, "/v1/nodes", tt.body); status != tt.want {
@@ -198,7 +237,7 @@ func TestRegisterNodeBMCValidation(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTestServer(t, newFakeStore())
-			body, err := json.Marshal(map[string]string{"id": "gpu-001", "rack": "r1", "bmc": tt.bmc})
+			body, err := json.Marshal(map[string]string{"id": "gpu-001", "pod": "p1", "rack": "r1", "bmc": tt.bmc})
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
@@ -211,7 +250,7 @@ func TestRegisterNodeBMCValidation(t *testing.T) {
 
 func TestRegisterNodeRequiresBMC(t *testing.T) {
 	srv := newTestServer(t, newFakeStore())
-	status, body := do(t, srv, http.MethodPost, "/v1/nodes", `{"id":"gpu-001","rack":"r1"}`)
+	status, body := do(t, srv, http.MethodPost, "/v1/nodes", `{"id":"gpu-001","pod":"p1","rack":"r1"}`)
 	if status != http.StatusUnprocessableEntity {
 		t.Fatalf("register without bmc = %d %v, want 422", status, body)
 	}
@@ -268,8 +307,8 @@ func TestUnknownNodeIs404(t *testing.T) {
 
 func TestListNodesFiltersByState(t *testing.T) {
 	fs := newFakeStore()
-	fs.nodes["a"] = node.Node{ID: "a", Rack: "r1", State: node.StateAvailable}
-	fs.nodes["b"] = node.Node{ID: "b", Rack: "r1", State: node.StateRacked}
+	fs.nodes["a"] = node.Node{ID: "a", Pod: "p1", Rack: "r1", State: node.StateAvailable}
+	fs.nodes["b"] = node.Node{ID: "b", Pod: "p1", Rack: "r1", State: node.StateRacked}
 	srv := newTestServer(t, fs)
 
 	status, body := do(t, srv, http.MethodGet, "/v1/nodes?state=available", "")

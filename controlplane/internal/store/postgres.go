@@ -18,7 +18,10 @@ import (
 	"gpu-fleet/controlplane/internal/node"
 )
 
-const pgUniqueViolation = "23505"
+const (
+	pgUniqueViolation    = "23505"
+	pgExclusionViolation = "23P01"
+)
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
@@ -36,6 +39,9 @@ type EventRecord struct {
 
 type Postgres struct {
 	pool *pgxpool.Pool
+	// now is the application clock (not the database's), used by the
+	// reservation methods that are not passed the current time.
+	now func() time.Time
 }
 
 func Open(ctx context.Context, url string) (*Postgres, error) {
@@ -55,7 +61,7 @@ func openPool(ctx context.Context, cfg *pgxpool.Config) (*Postgres, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	return &Postgres{pool: pool}, nil
+	return &Postgres{pool: pool, now: time.Now}, nil
 }
 
 func (p *Postgres) Close() { p.pool.Close() }
@@ -79,8 +85,8 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 
 func (p *Postgres) Register(ctx context.Context, n node.Node) error {
 	_, err := p.pool.Exec(ctx,
-		`INSERT INTO nodes (id, rack, bmc, state, tenant) VALUES ($1, $2, $3, $4, nullif($5, ''))`,
-		n.ID, n.Rack, n.BMC, string(n.State), n.Tenant)
+		`INSERT INTO nodes (id, pod, rack, bmc, state, tenant) VALUES ($1, $2, $3, $4, $5, nullif($6, ''))`,
+		n.ID, n.Pod, n.Rack, n.BMC, string(n.State), n.Tenant)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pgUniqueViolation {
 		return fmt.Errorf("%w: %s", ErrConflict, n.ID)
 	}
@@ -91,7 +97,7 @@ func (p *Postgres) Register(ctx context.Context, n node.Node) error {
 }
 
 const (
-	nodeColumns = `id, rack, bmc, state, coalesce(tenant, '')`
+	nodeColumns = `id, pod, rack, bmc, state, coalesce(tenant, '')`
 	selectNode  = `SELECT ` + nodeColumns + ` FROM nodes`
 )
 
@@ -170,7 +176,7 @@ func getOne[T any](ctx context.Context, q querier, sql, id string, scan pgx.RowT
 
 // nodeDests lists scan targets for nodeColumns, in order.
 func nodeDests(n *node.Node, state *string) []any {
-	return []any{&n.ID, &n.Rack, &n.BMC, state, &n.Tenant}
+	return []any{&n.ID, &n.Pod, &n.Rack, &n.BMC, state, &n.Tenant}
 }
 
 func scanNode(row pgx.CollectableRow) (node.Node, error) {

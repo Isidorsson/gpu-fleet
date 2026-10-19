@@ -13,6 +13,7 @@ import (
 
 	"gpu-fleet/controlplane/internal/api"
 	"gpu-fleet/controlplane/internal/metrics"
+	"gpu-fleet/controlplane/internal/placement"
 	"gpu-fleet/controlplane/internal/store"
 )
 
@@ -63,15 +64,30 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := m.RegisterCapacity(db); err != nil {
+		return err
+	}
 	workers, err := startWorkers(ctx, db, m.Provisioner(), log)
 	if err != nil {
 		return err
 	}
 	defer workers.Wait()
+	reconciler, err := startReconciler(ctx, db, m.Reservations(), log)
+	if err != nil {
+		return err
+	}
+	defer reconciler.Wait()
 
+	apiHandler := api.NewHandler(api.Deps{
+		Store:     db,
+		Place:     placement.Place,
+		Summarize: placement.Summarize,
+		Metrics:   m.Reservations(),
+		Log:       log,
+	})
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           newHandler(api.NewHandler(db, log), m.Handler()),
+		Handler:           newHandler(apiHandler, m.Handler()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errc := make(chan error, 1)

@@ -30,7 +30,7 @@ func TestStepScenarios(t *testing.T) {
 	}{
 		{
 			name:       "racked node is inspected and becomes available",
-			start:      node.Register(testNodeID, "r1", testBMCURL),
+			start:      node.Register(node.Spec{ID: testNodeID, Pod: "p1", Rack: "r1", BMC: testBMCURL}),
 			scripts:    map[deployagent.Task][]deployagent.Phase{deployagent.TaskInspect: {running, succeeded}},
 			wantState:  node.StateAvailable,
 			wantEvents: []node.Event{node.EventStartInspection, node.EventInspectionPassed},

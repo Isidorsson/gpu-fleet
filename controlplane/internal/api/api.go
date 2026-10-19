@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gpu-fleet/controlplane/internal/node"
+	"gpu-fleet/controlplane/internal/placement"
+	"gpu-fleet/controlplane/internal/reservation"
 	"gpu-fleet/controlplane/internal/store"
 )
 
@@ -23,6 +25,12 @@ type Store interface {
 	List(ctx context.Context, state node.State) ([]node.Node, error)
 	ApplyEvent(ctx context.Context, id string, ev node.Event, tenant string) (node.Node, error)
 	Events(ctx context.Context, id string) ([]store.EventRecord, error)
+
+	FreeCandidates(ctx context.Context, start, end time.Time) ([]placement.Candidate, error)
+	CreateReservation(ctx context.Context, req reservation.Request, place placement.Placer) (reservation.Reservation, error)
+	GetReservation(ctx context.Context, id string) (reservation.Reservation, error)
+	ListReservations(ctx context.Context, tenant string) ([]reservation.Reservation, error)
+	CancelReservation(ctx context.Context, id string, now time.Time) (reservation.Reservation, error)
 }
 
 const maxBodyBytes = 1 << 20
@@ -33,13 +41,50 @@ var (
 	errInvalid = errors.New("invalid request")
 )
 
-type server struct {
-	store Store
-	log   *slog.Logger
+// Deps are what the handler needs. Store, Place and Summarize are required.
+type Deps struct {
+	Store Store
+	// Place is handed to the store, which runs it inside the transaction that
+	// creates a reservation.
+	Place placement.Placer
+	// Summarize condenses free candidates per pod for GET /v1/capacity.
+	Summarize func([]placement.Candidate) []placement.PodCapacity
+	// Metrics defaults to discarding everything.
+	Metrics reservation.Metrics
+	// Now defaults to time.Now.
+	Now func() time.Time
+	// Log defaults to slog.Default().
+	Log *slog.Logger
 }
 
-func NewHandler(s Store, log *slog.Logger) http.Handler {
-	srv := &server{store: s, log: log}
+type server struct {
+	store     Store
+	place     placement.Placer
+	summarize func([]placement.Candidate) []placement.PodCapacity
+	metrics   reservation.Metrics
+	now       func() time.Time
+	log       *slog.Logger
+}
+
+// NewHandler panics if a required dependency is missing: that is a wiring
+// bug, not a runtime condition.
+func NewHandler(d Deps) http.Handler {
+	if d.Store == nil || d.Place == nil || d.Summarize == nil {
+		panic("api: Deps.Store, Deps.Place and Deps.Summarize are required")
+	}
+	srv := &server{
+		store: d.Store, place: d.Place, summarize: d.Summarize,
+		metrics: d.Metrics, now: d.Now, log: d.Log,
+	}
+	if srv.metrics == nil {
+		srv.metrics = reservation.NopMetrics{}
+	}
+	if srv.now == nil {
+		srv.now = time.Now
+	}
+	if srv.log == nil {
+		srv.log = slog.Default()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("POST /v1/nodes", srv.registerNode)
@@ -47,11 +92,17 @@ func NewHandler(s Store, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /v1/nodes/{id}", srv.getNode)
 	mux.HandleFunc("POST /v1/nodes/{id}/events", srv.applyEvent)
 	mux.HandleFunc("GET /v1/nodes/{id}/events", srv.listEvents)
+	mux.HandleFunc("POST /v1/reservations", srv.createReservation)
+	mux.HandleFunc("GET /v1/reservations", srv.listReservations)
+	mux.HandleFunc("GET /v1/reservations/{id}", srv.getReservation)
+	mux.HandleFunc("DELETE /v1/reservations/{id}", srv.cancelReservation)
+	mux.HandleFunc("GET /v1/capacity", srv.capacity)
 	return mux
 }
 
 type nodeJSON struct {
 	ID     string `json:"id"`
+	Pod    string `json:"pod"`
 	Rack   string `json:"rack"`
 	BMC    string `json:"bmc"`
 	State  string `json:"state"`
@@ -69,6 +120,7 @@ type eventJSON struct {
 func (s *server) registerNode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID   string `json:"id"`
+		Pod  string `json:"pod"`
 		Rack string `json:"rack"`
 		BMC  string `json:"bmc"`
 	}
@@ -76,15 +128,15 @@ func (s *server) registerNode(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, err)
 		return
 	}
-	if !validID.MatchString(req.ID) || req.Rack == "" {
-		s.writeError(w, fmt.Errorf("%w: id must match %s and rack is required", errInvalid, validID))
+	if !validID.MatchString(req.ID) || req.Pod == "" || req.Rack == "" {
+		s.writeError(w, fmt.Errorf("%w: id must match %s, and pod and rack are required", errInvalid, validID))
 		return
 	}
 	if !validBMC(req.BMC) {
 		s.writeError(w, fmt.Errorf("%w: bmc must be an absolute http or https URL with a host, no credentials, query or fragment", errInvalid))
 		return
 	}
-	n := node.Register(req.ID, req.Rack, req.BMC)
+	n := node.Register(node.Spec{ID: req.ID, Pod: req.Pod, Rack: req.Rack, BMC: req.BMC})
 	if err := s.store.Register(r.Context(), n); err != nil {
 		s.writeError(w, err)
 		return
@@ -188,12 +240,16 @@ func statusFor(err error) int {
 	switch {
 	case errors.Is(err, errBadReq):
 		return http.StatusBadRequest
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, reservation.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, store.ErrConflict), errors.Is(err, node.ErrInvalidTransition):
+	case errors.Is(err, store.ErrConflict), errors.Is(err, node.ErrInvalidTransition),
+		errors.Is(err, reservation.ErrNotCancellable), errors.Is(err, placement.ErrInsufficientCapacity):
 		return http.StatusConflict
-	case errors.Is(err, errInvalid), errors.Is(err, node.ErrTenantRequired), errors.Is(err, node.ErrUnexpectedTenant):
+	case errors.Is(err, errInvalid), errors.Is(err, node.ErrTenantRequired), errors.Is(err, node.ErrUnexpectedTenant),
+		errors.Is(err, reservation.ErrInvalid), errors.Is(err, placement.ErrInvalidRequest):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, store.ErrPlacementContention):
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}
@@ -215,5 +271,5 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func toNodeJSON(n node.Node) nodeJSON {
-	return nodeJSON{ID: n.ID, Rack: n.Rack, BMC: n.BMC, State: string(n.State), Tenant: n.Tenant}
+	return nodeJSON{ID: n.ID, Pod: n.Pod, Rack: n.Rack, BMC: n.BMC, State: string(n.State), Tenant: n.Tenant}
 }

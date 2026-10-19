@@ -95,7 +95,7 @@ func TestClaimWorkReturnsTheLeasedNode(t *testing.T) {
 	registerIn(t, p, "n1", node.StateInspecting)
 
 	got := mustClaim(t, p, "w1", longTTL)
-	want := node.Node{ID: "n1", Rack: "r1", BMC: testBMC("n1"), State: node.StateInspecting}
+	want := node.Node{ID: "n1", Pod: "p1", Rack: "r1", BMC: testBMC("n1"), State: node.StateInspecting}
 	if got != want {
 		t.Fatalf("claimed %+v, want %+v", got, want)
 	}

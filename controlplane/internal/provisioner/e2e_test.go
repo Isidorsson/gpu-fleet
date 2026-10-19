@@ -58,7 +58,7 @@ func newE2EFleet(t *testing.T) *e2eFleet {
 		url:   srv.URL,
 	}
 	for i := range e2eNodes {
-		f.store.add(node.Register(bmcsim.NodeID(i), "r1", srv.URL))
+		f.store.add(node.Register(node.Spec{ID: bmcsim.NodeID(i), Pod: "p1", Rack: "r1", BMC: srv.URL}))
 	}
 	return f
 }

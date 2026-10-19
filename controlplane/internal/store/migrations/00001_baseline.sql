@@ -1,6 +1,11 @@
 -- +goose Up
+-- The extension is database-wide, so it is pinned to public: installed in the
+-- first schema of the search_path it would be dropped with a per-test schema.
+CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
+
 CREATE TABLE nodes (
     id               text PRIMARY KEY,
+    pod              text NOT NULL,
     rack             text NOT NULL,
     bmc              text NOT NULL,
     state            text NOT NULL CHECK (state IN (
@@ -38,6 +43,39 @@ CREATE TABLE node_events (
 
 CREATE INDEX node_events_node_id_idx ON node_events (node_id, id);
 
+CREATE TABLE reservations (
+    id         text PRIMARY KEY,
+    tenant     text NOT NULL,
+    node_count integer NOT NULL CHECK (node_count BETWEEN 1 AND 64),
+    policy     text NOT NULL CHECK (policy IN ('same_rack', 'same_pod', 'any')),
+    period     tstzrange NOT NULL CHECK (NOT isempty(period)),
+    status     text NOT NULL CHECK (status IN (
+                   'scheduled', 'active', 'degraded', 'ended', 'cancelled')),
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Serve the reconciler's DueToStart and DueToEnd scans.
+CREATE INDEX reservations_due_start_idx ON reservations (lower(period))
+    WHERE status = 'scheduled';
+CREATE INDEX reservations_due_end_idx ON reservations (upper(period))
+    WHERE status IN ('active', 'degraded');
+
+CREATE INDEX reservations_tenant_idx ON reservations (tenant, created_at DESC);
+
+-- A row's period is the span the reservation holds that node. It is shorter
+-- than the reservation's own when the node replaced a failed one. The
+-- exclusion constraint is what makes double-booking impossible: placement
+-- races are settled here, not in application code.
+CREATE TABLE reservation_nodes (
+    reservation_id text NOT NULL REFERENCES reservations (id) ON DELETE CASCADE,
+    node_id        text NOT NULL REFERENCES nodes (id),
+    period         tstzrange NOT NULL CHECK (NOT isempty(period)),
+    PRIMARY KEY (reservation_id, node_id),
+    EXCLUDE USING gist (node_id WITH =, period WITH &&)
+);
+
 -- +goose Down
+DROP TABLE reservation_nodes;
+DROP TABLE reservations;
 DROP TABLE node_events;
 DROP TABLE nodes;

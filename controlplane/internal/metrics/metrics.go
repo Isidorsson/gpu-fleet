@@ -3,28 +3,37 @@
 package metrics
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"gpu-fleet/controlplane/internal/provisioner"
+	"gpu-fleet/controlplane/internal/reservation"
 )
 
 type Metrics struct {
 	registry    *prometheus.Registry
 	provisioner *provisionerMetrics
+	reservation *reservationMetrics
 	handler     http.Handler
 }
 
 // New builds a private registry with the Go runtime and process collectors,
 // fleet_nodes (counted through counter) and the provisioner metrics. Nothing
-// touches the global default registry.
+// touches the global default registry. The capacity metrics are added with
+// RegisterCapacity.
 func New(counter NodeCounter, log *slog.Logger) (*Metrics, error) {
-	m := &Metrics{registry: prometheus.NewRegistry(), provisioner: newProvisionerMetrics()}
+	m := &Metrics{
+		registry:    prometheus.NewRegistry(),
+		provisioner: newProvisionerMetrics(),
+		reservation: newReservationMetrics(),
+	}
 	cs := []prometheus.Collector{
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
@@ -49,3 +58,31 @@ func (m *Metrics) Handler() http.Handler { return m.handler }
 
 // Provisioner returns the sink to pass as provisioner.Deps.Metrics.
 func (m *Metrics) Provisioner() provisioner.Metrics { return m.provisioner }
+
+// Reservations returns the sink to pass to the reservation API and reconciler.
+// It is safe to use before RegisterCapacity: counts made earlier show up once
+// the capacity metrics are registered.
+func (m *Metrics) Reservations() reservation.Metrics { return m.reservation }
+
+// RegisterCapacity exposes capacity_free_nodes, reservations,
+// placement_failures_total and reservation_degraded_total, the first two
+// computed from src at scrape time. It can be called once.
+func (m *Metrics) RegisterCapacity(src CapacitySource) error {
+	return m.registerCapacity(src, time.Now)
+}
+
+func (m *Metrics) registerCapacity(src CapacitySource, clock func() time.Time) error {
+	if src == nil {
+		return errors.New("register capacity metrics: nil source")
+	}
+	cs := append([]prometheus.Collector{
+		newFreeNodesCollector(src, clock),
+		newReservationsCollector(src),
+	}, m.reservation.collectors()...)
+	for _, c := range cs {
+		if err := m.registry.Register(c); err != nil {
+			return fmt.Errorf("register capacity collector: %w", err)
+		}
+	}
+	return nil
+}

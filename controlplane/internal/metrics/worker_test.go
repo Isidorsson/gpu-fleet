@@ -97,7 +97,7 @@ func TestWorkerFeedsTheRegistry(t *testing.T) {
 		MaxAttempts:  3,
 		RetryBackoff: workerBackoff,
 	}, provisioner.Deps{
-		Store:   &oneNodeStore{n: node.Register("n1", "r1", "http://bmc.test")},
+		Store:   &oneNodeStore{n: node.Register(node.Spec{ID: "n1", Pod: "p1", Rack: "r1", BMC: "http://bmc.test"})},
 		Dial:    func(string) (provisioner.BMC, provisioner.Agent) { return mach, mach },
 		Clock:   &stepClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		Metrics: m.Provisioner(),

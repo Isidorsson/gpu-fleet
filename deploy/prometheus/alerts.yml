@@ -45,3 +45,12 @@ groups:
         annotations:
           summary: "Control plane {{ $labels.instance }} is down"
           description: "Prometheus has failed to scrape the control plane at {{ $labels.instance }} for 2m."
+
+      - alert: ReservationDegraded
+        expr: increase(reservation_degraded_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A reservation started with fewer nodes than requested"
+          description: 'Degraded reservation starts in the last 15m: {{ $value | printf "%.0f" }}. A quarantined node could not be replaced within the reservation''s placement policy.'

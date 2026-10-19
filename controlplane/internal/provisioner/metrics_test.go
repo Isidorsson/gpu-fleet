@@ -231,7 +231,7 @@ func TestFailedProvisionChainRecordsEveryTaskAndEvent(t *testing.T) {
 
 func TestRackedNodeCountsStartInspectionButNoTaskForIt(t *testing.T) {
 	h := newHarness(t)
-	h.store.add(node.Register(testNodeID, "r1", testBMCURL))
+	h.store.add(node.Register(node.Spec{ID: testNodeID, Pod: "p1", Rack: "r1", BMC: testBMCURL}))
 
 	h.step(t)
 
@@ -377,7 +377,7 @@ func TestStoreFailureOnApplyIsAbandonedNotLeaseLost(t *testing.T) {
 
 func TestLeaseLostBeforeFirstTaskStillCounts(t *testing.T) {
 	h := newHarness(t)
-	h.store.add(node.Register(testNodeID, "r1", testBMCURL))
+	h.store.add(node.Register(node.Spec{ID: testNodeID, Pod: "p1", Rack: "r1", BMC: testBMCURL}))
 	h.store.applyErr = store.ErrLeaseLost
 
 	h.step(t)

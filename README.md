@@ -31,7 +31,7 @@ Invariants (enforced by tests in `controlplane/internal/node`):
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/v1/nodes` | `{"id","rack","bmc"}`, registers a node in `racked`; `bmc` is the BMC base URL (absolute http/https URL, no credentials, query or fragment) |
+| `POST` | `/v1/nodes` | `{"id","pod","rack","bmc"}`, registers a node in `racked`; `bmc` is the BMC base URL (absolute http/https URL, no credentials, query or fragment) |
 | `GET` | `/v1/nodes?state=available` | `state` filter is optional |
 | `GET` | `/v1/nodes/{id}` | |
 | `POST` | `/v1/nodes/{id}/events` | `{"event":"provision","tenant":"acme"}` |
@@ -61,6 +61,29 @@ needs work (`racked`, `inspecting`, `provisioning`, `wiping`) with
 `bmcsim` simulates a fleet of BMCs per [docs/bmc-protocol.md](docs/bmc-protocol.md)
 with seeded failure injection, so the whole flow runs on a laptop.
 
+## Capacity reservations
+
+Reserve whole nodes for a time window, placed close together on the fabric:
+`same_rack`, `same_pod` or `any`. A `starts_at` in the past means now. If the
+fleet cannot satisfy the request the API answers 409 with the `largest` block
+available. Rules and contract: [docs/reservations.md](docs/reservations.md).
+
+- No node is ever double-booked: a Postgres exclusion constraint on
+  `(node_id, period)` enforces it, and concurrent bookings that lose the race
+  retry placement.
+- A leader-elected reconciler (Postgres advisory lock) provisions the nodes
+  when a reservation starts, swaps in replacements for nodes quarantined in
+  the meantime, and releases (wipes) them when it ends.
+
+```bash
+curl -s -X POST localhost:8080/v1/reservations -H 'Content-Type: application/json' \
+  -d '{"tenant":"acme","count":8,"policy":"same_rack","starts_at":"2026-11-01T09:00:00Z","ends_at":"2026-11-01T17:00:00Z"}'
+```
+
+```bash
+curl -s localhost:8080/v1/capacity
+```
+
 ## Develop
 
 ```bash
@@ -84,7 +107,9 @@ Control plane with 4 workers (`PROVISIONER_WORKERS`, 0 disables them):
 cd controlplane && DATABASE_URL=postgres://fleet:fleet-dev-only@localhost:5432/fleet?sslmode=disable BMC_USER=sim BMC_PASSWORD=sim-dev-only go run ./cmd/controlplane
 ```
 
-Register the fleet and watch it inspect itself:
+Register the fleet and watch it inspect itself. The seed places 8 nodes per
+rack, racks `r1` to `r4` in pod `p1` and the rest in pod `p2` (50 nodes: 32 in
+`p1`, 18 in `p2`):
 
 ```bash
 BMCSIM_USER=sim BMCSIM_PASSWORD=sim-dev-only deploy/seed.sh
@@ -145,5 +170,5 @@ On Windows Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1`.
 1. ~~Postgres-backed node store and lifecycle API~~
 2. ~~Simulated Redfish BMC fleet + provisioner workers~~
 3. ~~Agent `/metrics` exporter on :9400, Grafana dashboard~~
-4. Capacity reservations with topology awareness
+4. ~~Capacity reservations with topology awareness~~
 5. Stretch: Kubernetes remediation operator or tenant attestation

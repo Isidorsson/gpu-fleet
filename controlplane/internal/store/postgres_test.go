@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,13 @@ import (
 // are isolated even for queries that look at every node (ClaimWork).
 func openTestStore(t *testing.T) *Postgres {
 	t.Helper()
+	return openTestStoreWithConns(t, 0)
+}
+
+// openTestStoreWithConns is openTestStore with a pool of maxConns connections,
+// or the driver default when it is 0, for tests that hold many open at once.
+func openTestStoreWithConns(t *testing.T, maxConns int32) *Postgres {
+	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL not set")
@@ -32,6 +40,9 @@ func openTestStore(t *testing.T) *Postgres {
 		t.Fatalf("parse TEST_DATABASE_URL: %v", err)
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = createTestSchema(t, url)
+	if maxConns > 0 {
+		cfg.MaxConns = maxConns
+	}
 
 	p, err := openPool(ctx, cfg)
 	if err != nil {
@@ -72,9 +83,11 @@ func execAdmin(t *testing.T, url, sql string) {
 
 func testBMC(id string) string { return "http://" + id + ".bmc.test:8443" }
 
-func register(t *testing.T, p *Postgres, id string) {
+func register(t *testing.T, p *Postgres, id string) { registerAt(t, p, id, "p1", "r1") }
+
+func registerAt(t *testing.T, p *Postgres, id, pod, rack string) {
 	t.Helper()
-	if err := p.Register(context.Background(), node.Register(id, "r1", testBMC(id))); err != nil {
+	if err := p.Register(context.Background(), node.Register(node.Spec{ID: id, Pod: pod, Rack: rack, BMC: testBMC(id)})); err != nil {
 		t.Fatalf("register %s: %v", id, err)
 	}
 }
@@ -98,7 +111,12 @@ var pathTo = map[node.State][]node.Event{
 
 func registerIn(t *testing.T, p *Postgres, id string, state node.State) {
 	t.Helper()
-	register(t, p, id)
+	registerAtIn(t, p, id, "p1", "r1", state)
+}
+
+func registerAtIn(t *testing.T, p *Postgres, id, pod, rack string, state node.State) {
+	t.Helper()
+	registerAt(t, p, id, pod, rack)
 	for _, ev := range pathTo[state] {
 		tenant := ""
 		if ev == node.EventProvision {
@@ -114,8 +132,8 @@ func TestRegisterAndGet(t *testing.T) {
 	p := openTestStore(t)
 	ctx := context.Background()
 
-	want := node.Node{ID: "n1", Rack: "r7", BMC: "https://10.0.0.7:8443", State: node.StateRacked}
-	if err := p.Register(ctx, node.Register(want.ID, want.Rack, want.BMC)); err != nil {
+	want := node.Node{ID: "n1", Pod: "p3", Rack: "r7", BMC: "https://10.0.0.7:8443", State: node.StateRacked}
+	if err := p.Register(ctx, node.Register(node.Spec{ID: want.ID, Pod: want.Pod, Rack: want.Rack, BMC: want.BMC})); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	got, err := p.Get(ctx, "n1")
@@ -147,10 +165,41 @@ func TestBMCRoundTripsThroughList(t *testing.T) {
 	}
 }
 
+func TestPodRoundTripsThroughListClaimAndTransition(t *testing.T) {
+	p := openTestStore(t)
+	ctx := context.Background()
+	registerAt(t, p, "a", "pod-7", "r1")
+	registerAt(t, p, "b", "pod-8", "r2")
+
+	nodes, err := p.List(ctx, "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(nodes) != 2 || nodes[0].Pod != "pod-7" || nodes[1].Pod != "pod-8" {
+		t.Fatalf("list pods = %+v, want pod-7 then pod-8", nodes)
+	}
+
+	claimed, err := p.ClaimWork(ctx, "w1", time.Minute)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if claimed.Pod != "pod-7" || claimed.Rack != "r1" {
+		t.Fatalf("claimed %+v, want pod-7/r1", claimed)
+	}
+
+	moved, err := p.ApplyEvent(ctx, "b", node.EventStartInspection, "")
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if moved.Pod != "pod-8" || moved.Rack != "r2" {
+		t.Fatalf("transitioned %+v, want pod-8/r2", moved)
+	}
+}
+
 func TestRegisterDuplicateConflicts(t *testing.T) {
 	p := openTestStore(t)
 	register(t, p, "n1")
-	err := p.Register(context.Background(), node.Register("n1", "r1", testBMC("n1")))
+	err := p.Register(context.Background(), node.Register(node.Spec{ID: "n1", Pod: "p1", Rack: "r1", BMC: testBMC("n1")}))
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("second register: err = %v, want ErrConflict", err)
 	}
