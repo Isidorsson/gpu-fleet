@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"gpu-fleet/controlplane/internal/provisioner"
+	"gpu-fleet/controlplane/internal/remediation"
 	"gpu-fleet/controlplane/internal/reservation"
 )
 
@@ -21,25 +22,29 @@ type Metrics struct {
 	registry    *prometheus.Registry
 	provisioner *provisionerMetrics
 	reservation *reservationMetrics
+	remediation *remediationMetrics
 	handler     http.Handler
 }
 
 // New builds a private registry with the Go runtime and process collectors,
-// fleet_nodes (counted through counter) and the provisioner metrics. Nothing
-// touches the global default registry. The capacity metrics are added with
-// RegisterCapacity.
+// fleet_nodes (counted through counter), the provisioner metrics and
+// remediation_actions_total. Nothing touches the global default registry. The
+// capacity metrics are added with RegisterCapacity.
 func New(counter NodeCounter, log *slog.Logger) (*Metrics, error) {
 	m := &Metrics{
 		registry:    prometheus.NewRegistry(),
 		provisioner: newProvisionerMetrics(),
 		reservation: newReservationMetrics(),
+		remediation: newRemediationMetrics(),
 	}
 	cs := []prometheus.Collector{
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		newFleetCollector(counter),
 	}
-	for _, c := range append(cs, m.provisioner.collectors()...) {
+	cs = append(cs, m.provisioner.collectors()...)
+	cs = append(cs, m.remediation.collectors()...)
+	for _, c := range cs {
 		if err := m.registry.Register(c); err != nil {
 			return nil, fmt.Errorf("register collector: %w", err)
 		}
@@ -63,6 +68,9 @@ func (m *Metrics) Provisioner() provisioner.Metrics { return m.provisioner }
 // It is safe to use before RegisterCapacity: counts made earlier show up once
 // the capacity metrics are registered.
 func (m *Metrics) Reservations() reservation.Metrics { return m.reservation }
+
+// Remediation returns the sink to pass to the remediation service.
+func (m *Metrics) Remediation() remediation.Metrics { return m.remediation }
 
 // RegisterCapacity exposes capacity_free_nodes, reservations,
 // placement_failures_total and reservation_degraded_total, the first two

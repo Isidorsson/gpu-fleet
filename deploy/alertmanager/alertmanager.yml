@@ -1,0 +1,19 @@
+route:
+  receiver: "null"
+  group_by: [alertname, node_id]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 1h
+  routes:
+    - matchers: [alertname="GPUFatalXid"]
+      receiver: remediation
+
+receivers:
+  - name: "null"
+  - name: remediation
+    webhook_configs:
+      - url: http://host.docker.internal:8080/v1/alerts
+        send_resolved: true
+        http_config:
+          authorization:
+            credentials_file: /etc/alertmanager/webhook_token

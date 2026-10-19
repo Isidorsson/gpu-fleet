@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 
 	"gpu-fleet/controlplane/internal/node"
 	"gpu-fleet/controlplane/internal/placement"
+	"gpu-fleet/controlplane/internal/remediation"
 	"gpu-fleet/controlplane/internal/reservation"
 	"gpu-fleet/controlplane/internal/store"
 )
@@ -40,10 +42,12 @@ var (
 	validID    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	errBadReq  = errors.New("bad request")
 	errInvalid = errors.New("invalid request")
+
+	errUnauthorized = errors.New("unauthorized")
 )
 
-// Deps are what the handler needs. Store, Attestations, Place and Summarize
-// are required.
+// Deps are what the handler needs. Store, Attestations, Place, Summarize,
+// Remediator, RemediationLog and WebhookToken are required.
 type Deps struct {
 	Store Store
 	// Attestations serves the signed results and the keys to check them with.
@@ -53,6 +57,12 @@ type Deps struct {
 	Place placement.Placer
 	// Summarize condenses free candidates per pod for GET /v1/capacity.
 	Summarize func([]placement.Candidate) []placement.PodCapacity
+	// Remediator handles the alerts POST /v1/alerts receives.
+	Remediator Remediator
+	// RemediationLog serves GET /v1/remediations.
+	RemediationLog RemediationLog
+	// WebhookToken is the bearer token POST /v1/alerts requires.
+	WebhookToken string
 	// Metrics defaults to discarding everything.
 	Metrics reservation.Metrics
 	// Now defaults to time.Now.
@@ -62,23 +72,29 @@ type Deps struct {
 }
 
 type server struct {
-	store        Store
-	attestations Attestations
-	place        placement.Placer
-	summarize    func([]placement.Candidate) []placement.PodCapacity
-	metrics      reservation.Metrics
-	now          func() time.Time
-	log          *slog.Logger
+	store          Store
+	attestations   Attestations
+	place          placement.Placer
+	summarize      func([]placement.Candidate) []placement.PodCapacity
+	remediator     Remediator
+	remediationLog RemediationLog
+	webhookDigest  [sha256.Size]byte
+	metrics        reservation.Metrics
+	now            func() time.Time
+	log            *slog.Logger
 }
 
 // NewHandler panics if a required dependency is missing: that is a wiring
 // bug, not a runtime condition.
 func NewHandler(d Deps) http.Handler {
-	if d.Store == nil || d.Attestations == nil || d.Place == nil || d.Summarize == nil {
-		panic("api: Deps.Store, Deps.Attestations, Deps.Place and Deps.Summarize are required")
+	if d.Store == nil || d.Attestations == nil || d.Place == nil || d.Summarize == nil ||
+		d.Remediator == nil || d.RemediationLog == nil || d.WebhookToken == "" {
+		panic("api: Deps.Store, Deps.Attestations, Deps.Place, Deps.Summarize, Deps.Remediator, " +
+			"Deps.RemediationLog and Deps.WebhookToken are required")
 	}
 	srv := &server{
 		store: d.Store, attestations: d.Attestations, place: d.Place, summarize: d.Summarize,
+		remediator: d.Remediator, remediationLog: d.RemediationLog, webhookDigest: sha256.Sum256([]byte(d.WebhookToken)),
 		metrics: d.Metrics, now: d.Now, log: d.Log,
 	}
 	if srv.metrics == nil {
@@ -104,6 +120,8 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /v1/reservations/{id}", srv.getReservation)
 	mux.HandleFunc("DELETE /v1/reservations/{id}", srv.cancelReservation)
 	mux.HandleFunc("GET /v1/capacity", srv.capacity)
+	mux.HandleFunc("POST /v1/alerts", srv.receiveAlerts)
+	mux.HandleFunc("GET /v1/remediations", srv.listRemediations)
 	return mux
 }
 
@@ -251,7 +269,9 @@ func (s *server) writeError(w http.ResponseWriter, err error) {
 
 func statusFor(err error) int {
 	switch {
-	case errors.Is(err, errBadReq):
+	case errors.Is(err, errUnauthorized):
+		return http.StatusUnauthorized
+	case errors.Is(err, errBadReq), errors.Is(err, remediation.ErrUnsupportedVersion):
 		return http.StatusBadRequest
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrAttestationNotFound),
 		errors.Is(err, reservation.ErrNotFound):
@@ -269,9 +289,18 @@ func statusFor(err error) int {
 	}
 }
 
+// decode reads a request body that must contain no fields dst lacks.
 func decode(w http.ResponseWriter, r *http.Request, dst any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	dec := bodyDecoder(w, r)
 	dec.DisallowUnknownFields()
+	return decodeInto(dec, dst)
+}
+
+func bodyDecoder(w http.ResponseWriter, r *http.Request) *json.Decoder {
+	return json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+}
+
+func decodeInto(dec *json.Decoder, dst any) error {
 	if err := dec.Decode(dst); err != nil {
 		return fmt.Errorf("%w: malformed JSON body: %w", errBadReq, err)
 	}

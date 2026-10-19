@@ -666,9 +666,12 @@ func TestCapacityBadWindowIs400(t *testing.T) {
 func TestNewHandlerRequiresItsDependencies(t *testing.T) {
 	complete := testDeps(newFakeStore())
 	tests := map[string]func(*Deps){
-		"store":     func(d *Deps) { d.Store = nil },
-		"place":     func(d *Deps) { d.Place = nil },
-		"summarize": func(d *Deps) { d.Summarize = nil },
+		"store":           func(d *Deps) { d.Store = nil },
+		"place":           func(d *Deps) { d.Place = nil },
+		"summarize":       func(d *Deps) { d.Summarize = nil },
+		"remediator":      func(d *Deps) { d.Remediator = nil },
+		"remediation log": func(d *Deps) { d.RemediationLog = nil },
+		"webhook token":   func(d *Deps) { d.WebhookToken = "" },
 	}
 	for name, remove := range tests {
 		t.Run(name, func(t *testing.T) {

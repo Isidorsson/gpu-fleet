@@ -1,10 +1,15 @@
 # Local dev stack. The control plane runs on the host and is scraped through
-# host.docker.internal. Agents run here on the fake GPU backend.
+# host.docker.internal; Alertmanager posts remediation webhooks back to it.
+# Agents run here on the fake GPU backend, one per simulated host, all behind
+# the DNS name `agent`.
 x-agent: &agent
   build:
     context: ../agent
     dockerfile: Dockerfile
   image: gpu-fleet-agent:dev
+  networks:
+    default:
+      aliases: [agent]
 
 services:
   postgres:
@@ -20,16 +25,40 @@ services:
       interval: 5s
       retries: 10
 
-  agent:
-    <<: *agent
-    deploy:
-      replicas: 3
-
-  agent-faulty:
+  agent-node-001:
     <<: *agent
     environment:
-      AGENT_HOSTNAME: agent-faulty
-      FAKE_XID: "3:79"
+      AGENT_NODE_ID: node-001
+      AGENT_HOSTNAME: node-001
+    ports: ["19401:9400"]
+
+  agent-node-002:
+    <<: *agent
+    environment:
+      AGENT_NODE_ID: node-002
+      AGENT_HOSTNAME: node-002
+    ports: ["19402:9400"]
+
+  agent-node-003:
+    <<: *agent
+    environment:
+      AGENT_NODE_ID: node-003
+      AGENT_HOSTNAME: node-003
+    ports: ["19403:9400"]
+
+  agent-node-004:
+    <<: *agent
+    environment:
+      AGENT_NODE_ID: node-004
+      AGENT_HOSTNAME: node-004
+    ports: ["19404:9400"]
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    volumes:
+      - ./alertmanager:/etc/alertmanager:ro
+    ports: ["9093:9093"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
 
   prometheus:
     image: prom/prometheus:v3.5.0

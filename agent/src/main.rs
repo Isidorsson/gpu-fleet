@@ -1,7 +1,9 @@
 mod config;
+mod control;
 mod fake;
 mod gpu;
 mod metrics;
+mod request;
 mod sampler;
 mod server;
 mod shutdown;
@@ -43,17 +45,22 @@ async fn run(config: Config) -> Result<(), String> {
         .await
         .map_err(|e| format!("binding {}: {e}", config.listen))?;
 
-    let backend =
-        FakeBackend::new(config.fake_gpus, config.hostname.as_str()).with_xid(config.fake_xid);
-    let metrics = Arc::new(Metrics::new(config.hostname.as_str()));
+    let backend = FakeBackend::new(config.fake_gpus, config.hostname.as_str());
+    let injector = backend.injector();
+    if let Some(xid) = config.fake_xid {
+        injector
+            .inject(xid.gpu, xid.code)
+            .map_err(|e| format!("seeding FAKE_XID: {e}"))?;
+    }
+    let metrics = Arc::new(Metrics::new(&config.hostname, &config.node_id));
     let (sampler, snapshots) = Sampler::new(backend, system_clock, metrics.counters().clone());
     let sampler_task = tokio::spawn(sampler.run(config.sample_interval));
 
     eprintln!(
-        "gpu-agent: serving {} fake GPUs as {:?} on {}",
-        config.fake_gpus, config.hostname, config.listen
+        "gpu-agent: serving {} fake GPUs as {:?} (node_id {:?}) on {}",
+        config.fake_gpus, config.hostname, config.node_id, config.listen
     );
-    let app = server::router(AppState::new(metrics, snapshots));
+    let app = server::router(AppState::new(metrics, snapshots)).merge(control::router(injector));
     let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown.requested())
         .await;

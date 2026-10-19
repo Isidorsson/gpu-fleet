@@ -15,7 +15,7 @@ real hosts running dcgm-exporter.
 ### Per-GPU metrics
 
 Labels on every per-GPU metric: `gpu` (index, `"0"`..), `UUID`, `modelName`,
-`Hostname`.
+`Hostname`, `node_id` (from `AGENT_NODE_ID`; see [remediation.md](remediation.md)).
 
 | Metric | Type | Unit | Notes |
 |---|---|---|---|
@@ -27,7 +27,7 @@ Labels on every per-GPU metric: `gpu` (index, `"0"`..), `UUID`, `modelName`,
 
 ### Agent self-metrics
 
-Label: `Hostname`.
+Labels: `Hostname`, `node_id`.
 
 | Metric | Type | Notes |
 |---|---|---|
@@ -92,7 +92,7 @@ Same `/metrics` endpoint. See [reservations.md](reservations.md).
 | Job | Targets |
 |---|---|
 | `controlplane` | `host.docker.internal:8080` (runs on the host during development) |
-| `gpu-agent` | `dns_sd_configs` A records for compose services `agent` and `agent-faulty`, port 9400 |
+| `gpu-agent` | `dns_sd_configs` A records for the compose network alias `agent` (agents `agent-node-001`..`004`), port 9400 |
 
 ## Dashboard: "GPU Fleet" (uid `gpu-fleet`)
 
@@ -148,3 +148,19 @@ the "Quarantine causes" panel.
 | Alert | Expr | For | Severity |
 |---|---|---|---|
 | `AttestationFailure` | `increase(attestations_total{verdict="fail"}[15m]) > 0` | 0m | warning |
+
+## Remediation (control plane)
+
+See [remediation.md](remediation.md).
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `remediation_actions_total` | counter | `outcome` | one per alert handled by the webhook; all six outcomes pre-initialized to 0 |
+
+| Panel (Fleet row) | Type | Query |
+|---|---|---|
+| Auto-quarantined (24h) | stat | `sum(increase(remediation_actions_total{outcome="quarantined"}[24h]))` |
+
+| Alert | Expr | For | Severity |
+|---|---|---|---|
+| `RemediationRateLimited` | `increase(remediation_actions_total{outcome="rate_limited"}[15m]) > 0` | 0m | critical |

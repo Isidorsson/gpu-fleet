@@ -60,7 +60,10 @@ mod tests {
 
     fn app(snapshot: Snapshot) -> Router {
         let (_publisher, receiver) = watch::channel(Arc::new(snapshot));
-        router(AppState::new(Arc::new(Metrics::new("node-a")), receiver))
+        router(AppState::new(
+            Arc::new(Metrics::new("node-a", "node-009")),
+            receiver,
+        ))
     }
 
     async fn get_path(app: Router, path: &str) -> Response {
@@ -109,7 +112,7 @@ mod tests {
         let body = body_text(response).await;
         assert!(!body.contains("DCGM_FI_DEV_GPU_TEMP"), "{body}");
         assert!(
-            body.contains("gpu_agent_last_sample_timestamp_seconds{Hostname=\"node-a\"} 0\n"),
+            body.contains("gpu_agent_last_sample_timestamp_seconds{Hostname=\"node-a\",node_id=\"node-009\"} 0\n"),
             "{body}"
         );
     }
@@ -117,7 +120,10 @@ mod tests {
     #[tokio::test]
     async fn metrics_reflect_the_latest_published_snapshot() {
         let (publisher, receiver) = watch::channel(Arc::new(Snapshot::default()));
-        let router = router(AppState::new(Arc::new(Metrics::new("node-a")), receiver));
+        let router = router(AppState::new(
+            Arc::new(Metrics::new("node-a", "node-009")),
+            receiver,
+        ));
 
         publisher.send_replace(Arc::new(Snapshot {
             taken_at: 42,
@@ -125,7 +131,9 @@ mod tests {
         }));
         let body = body_text(get_path(router, "/metrics").await).await;
 
-        assert!(body.contains("gpu_agent_last_sample_timestamp_seconds{Hostname=\"node-a\"} 42\n"));
+        assert!(body.contains(
+            "gpu_agent_last_sample_timestamp_seconds{Hostname=\"node-a\",node_id=\"node-009\"} 42\n"
+        ));
     }
 
     #[tokio::test]

@@ -102,12 +102,15 @@ func (f *fakeStore) Events(_ context.Context, id string) ([]store.EventRecord, e
 
 func testDeps(fs *fakeStore) Deps {
 	return Deps{
-		Store:        fs,
-		Attestations: newFakeAttestations(),
-		Place:        fakePlace,
-		Summarize:    (&fakeSummarizer{}).summarize,
-		Now:          func() time.Time { return testNow },
-		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:          fs,
+		Attestations:   newFakeAttestations(),
+		Place:          fakePlace,
+		Summarize:      (&fakeSummarizer{}).summarize,
+		Remediator:     &fakeRemediator{},
+		RemediationLog: &fakeRemediationLog{},
+		WebhookToken:   testWebhookToken,
+		Now:            func() time.Time { return testNow },
+		Log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 

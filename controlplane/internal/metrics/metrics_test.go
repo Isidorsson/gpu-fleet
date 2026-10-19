@@ -14,6 +14,7 @@ import (
 	"gpu-fleet/controlplane/internal/attest"
 	"gpu-fleet/controlplane/internal/deployagent"
 	"gpu-fleet/controlplane/internal/provisioner"
+	"gpu-fleet/controlplane/internal/remediation"
 )
 
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -38,6 +39,7 @@ func recordOneOfEverything(m *Metrics) {
 	p.EventApplied("inspection_passed")
 	p.Attested(attest.VerdictPass)
 	p.LeaseLost()
+	m.Remediation().Remediated(remediation.OutcomeQuarantined)
 }
 
 func TestHandlerServesAllFamilies(t *testing.T) {
@@ -64,6 +66,9 @@ func TestHandlerServesAllFamilies(t *testing.T) {
 		`attestations_total{verdict="pass"} 1`,
 		`attestations_total{verdict="fail"} 0`,
 		"# TYPE provisioner_lease_lost_total counter",
+		"# TYPE remediation_actions_total counter",
+		`remediation_actions_total{outcome="quarantined"} 1`,
+		`remediation_actions_total{outcome="rate_limited"} 0`,
 		"# TYPE go_goroutines gauge",
 		"# TYPE process_start_time_seconds gauge",
 	} {
@@ -85,7 +90,7 @@ func TestHandlerKeepsServingOtherFamiliesWhenFleetQueryFails(t *testing.T) {
 	if strings.Contains(body, "fleet_nodes") {
 		t.Error("fleet_nodes served although its query failed")
 	}
-	for _, want := range []string{"provisioner_tasks_total", "attestations_total", "provisioner_lease_lost_total", "go_goroutines"} {
+	for _, want := range []string{"provisioner_tasks_total", "attestations_total", "provisioner_lease_lost_total", "remediation_actions_total", "go_goroutines"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("scrape is missing %q", want)
 		}

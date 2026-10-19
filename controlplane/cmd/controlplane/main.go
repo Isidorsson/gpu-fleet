@@ -84,14 +84,21 @@ func run() error {
 		return err
 	}
 	defer reconciler.Wait()
+	remediator, err := newRemediation(db, m.Remediation(), log)
+	if err != nil {
+		return err
+	}
 
 	apiHandler := api.NewHandler(api.Deps{
-		Store:        db,
-		Place:        placement.Place,
-		Summarize:    placement.Summarize,
-		Metrics:      m.Reservations(),
-		Attestations: attestations,
-		Log:          log,
+		Store:          db,
+		Place:          placement.Place,
+		Summarize:      placement.Summarize,
+		Metrics:        m.Reservations(),
+		Attestations:   attestations,
+		Remediator:     remediator.service,
+		RemediationLog: db,
+		WebhookToken:   remediator.token,
+		Log:            log,
 	})
 	srv := &http.Server{
 		Addr:              addr,

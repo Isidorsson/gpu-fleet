@@ -7,8 +7,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }} is unhealthy"
-          description: "{{ $labels.modelName }} {{ $labels.UUID }} on {{ $labels.Hostname }} (gpu {{ $labels.gpu }}) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
+          summary: "GPU {{ $labels.gpu }} on {{ $labels.Hostname }}{{ if $labels.node_id }} (node_id {{ $labels.node_id }}){{ end }} is unhealthy"
+          description: "{{ $labels.modelName }} {{ $labels.UUID }} on {{ $labels.Hostname }} (gpu {{ $labels.gpu }}{{ if $labels.node_id }}, node_id {{ $labels.node_id }}{{ end }}) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
 
       - alert: QuarantineSpike
         expr: sum(increase(provisioner_events_total{event=~"inspection_failed|attestation_failed|wipe_failed|hardware_fault"}[15m])) > 5
@@ -63,3 +63,12 @@ groups:
         annotations:
           summary: "A node failed tenant attestation"
           description: 'Failed attestations in the last 15m on {{ $labels.instance }}: {{ $value | printf "%.0f" }}. Each failing node is quarantined as attestation_failed; the reasons are in the control plane log and in GET /v1/nodes/{id}/attestation.'
+
+      - alert: RemediationRateLimited
+        expr: increase(remediation_actions_total{outcome="rate_limited"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Automatic remediation hit its rate limit"
+          description: 'Quarantines refused by the remediation rate limit in the last 15m on {{ $labels.instance }}: {{ $value | printf "%.0f" }}. The platform has stopped taking nodes out of service on its own, so nodes with fatal GPU errors may still be in service. Review GET /v1/remediations and quarantine the failing nodes by hand.'

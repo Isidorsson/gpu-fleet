@@ -64,6 +64,10 @@ jobs:
           promtool check config /etc/prometheus/prometheus.yml
           promtool check rules /etc/prometheus/alerts.yml
           promtool test rules /etc/prometheus/alerts_test.yml
+      - name: amtool check-config
+        run: |
+          image=$(docker compose -f deploy/compose.yaml config --images | grep '^prom/alertmanager:')
+          docker run --rm --entrypoint amtool -v "$PWD/deploy/alertmanager:/etc/alertmanager:ro" "$image" check-config /etc/alertmanager/alertmanager.yml
       - name: Dashboard JSON
         run: |
           python3 - <<'PY'

@@ -7,9 +7,9 @@ tests:
   - name: GPUFatalXid fires after 1m unhealthy, only for the unhealthy GPU
     interval: 15s
     input_series:
-      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", instance="10.0.0.2:9400", Hostname="node-a", gpu="0", UUID="GPU-node-a-0", modelName="H100"}'
+      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", instance="10.0.0.2:9400", Hostname="node-a", node_id="node-003", gpu="0", UUID="GPU-node-a-0", modelName="H100"}'
         values: "1+0x40"
-      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", instance="10.0.0.2:9400", Hostname="node-a", gpu="3", UUID="GPU-node-a-3", modelName="H100"}'
+      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", instance="10.0.0.2:9400", Hostname="node-a", node_id="node-003", gpu="3", UUID="GPU-node-a-3", modelName="H100"}'
         values: "1+0x4 0+0x40"
     alert_rule_test:
       - eval_time: 60s
@@ -26,20 +26,45 @@ tests:
               job: gpu-agent
               instance: 10.0.0.2:9400
               Hostname: node-a
+              node_id: node-003
               gpu: "3"
               UUID: GPU-node-a-3
               modelName: H100
             exp_annotations:
-              summary: "GPU 3 on node-a is unhealthy"
-              description: "H100 GPU-node-a-3 on node-a (gpu 3) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
+              summary: "GPU 3 on node-a (node_id node-003) is unhealthy"
+              description: "H100 GPU-node-a-3 on node-a (gpu 3, node_id node-003) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
 
   - name: GPUFatalXid resolves when the GPU recovers
     interval: 15s
     input_series:
-      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", Hostname="node-a", gpu="3", UUID="GPU-node-a-3", modelName="H100"}'
+      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", Hostname="node-a", node_id="node-003", gpu="3", UUID="GPU-node-a-3", modelName="H100"}'
         values: "1+0x4 0+0x12 1+0x20"
     alert_rule_test:
       - eval_time: 180s
+        alertname: GPUFatalXid
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: gpu-agent
+              Hostname: node-a
+              node_id: node-003
+              gpu: "3"
+              UUID: GPU-node-a-3
+              modelName: H100
+            exp_annotations:
+              summary: "GPU 3 on node-a (node_id node-003) is unhealthy"
+              description: "H100 GPU-node-a-3 on node-a (gpu 3, node_id node-003) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
+      - eval_time: 300s
+        alertname: GPUFatalXid
+        exp_alerts: []
+
+  - name: GPUFatalXid on an agent without a node ID leaves node_id out of the text
+    interval: 15s
+    input_series:
+      - series: 'gpu_agent_gpu_healthy{job="gpu-agent", Hostname="node-a", gpu="3", UUID="GPU-node-a-3", modelName="H100"}'
+        values: "0+0x40"
+    alert_rule_test:
+      - eval_time: 150s
         alertname: GPUFatalXid
         exp_alerts:
           - exp_labels:
@@ -52,9 +77,6 @@ tests:
             exp_annotations:
               summary: "GPU 3 on node-a is unhealthy"
               description: "H100 GPU-node-a-3 on node-a (gpu 3) has reported gpu_agent_gpu_healthy 0 for 1m: uncorrected ECC errors or a fatal XID."
-      - eval_time: 300s
-        alertname: GPUFatalXid
-        exp_alerts: []
 
   - name: QuarantineSpike counts the four quarantine causes together
     interval: 1m
@@ -308,4 +330,68 @@ tests:
     alert_rule_test:
       - eval_time: 12m
         alertname: AttestationFailure
+        exp_alerts: []
+
+  - name: RemediationRateLimited fires on a rate_limited increase and resolves once it leaves the window
+    interval: 1m
+    input_series:
+      - series: 'remediation_actions_total{outcome="rate_limited", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0x5 1x45"
+      - series: 'remediation_actions_total{outcome="quarantined", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0+1x50"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RemediationRateLimited
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: RemediationRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              outcome: rate_limited
+              job: controlplane
+              instance: host.docker.internal:8080
+            exp_annotations:
+              summary: "Automatic remediation hit its rate limit"
+              description: "Quarantines refused by the remediation rate limit in the last 15m on host.docker.internal:8080: 1. The platform has stopped taking nodes out of service on its own, so nodes with fatal GPU errors may still be in service. Review GET /v1/remediations and quarantine the failing nodes by hand."
+      - eval_time: 15m
+        alertname: RemediationRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              outcome: rate_limited
+              job: controlplane
+              instance: host.docker.internal:8080
+            exp_annotations:
+              summary: "Automatic remediation hit its rate limit"
+              description: "Quarantines refused by the remediation rate limit in the last 15m on host.docker.internal:8080: 1. The platform has stopped taking nodes out of service on its own, so nodes with fatal GPU errors may still be in service. Review GET /v1/remediations and quarantine the failing nodes by hand."
+      - eval_time: 40m
+        alertname: RemediationRateLimited
+        exp_alerts: []
+
+  - name: RemediationRateLimited stays quiet on quarantined-only traffic
+    interval: 1m
+    input_series:
+      - series: 'remediation_actions_total{outcome="quarantined", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0+1x40"
+      - series: 'remediation_actions_total{outcome="already_quarantined", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0+2x40"
+      - series: 'remediation_actions_total{outcome="rate_limited", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RemediationRateLimited
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: RemediationRateLimited
+        exp_alerts: []
+
+  - name: RemediationRateLimited stays quiet across a control plane restart
+    interval: 1m
+    input_series:
+      - series: 'remediation_actions_total{outcome="rate_limited", job="controlplane", instance="host.docker.internal:8080"}'
+        values: "3x9 0x30"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RemediationRateLimited
         exp_alerts: []

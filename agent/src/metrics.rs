@@ -21,8 +21,9 @@ const LABEL_GPU: &str = "gpu";
 const LABEL_UUID: &str = "UUID";
 const LABEL_MODEL: &str = "modelName";
 const LABEL_HOSTNAME: &str = "Hostname";
+const LABEL_NODE_ID: &str = "node_id";
 
-type GpuLabels = [(&'static str, String); 4];
+type GpuLabels = [(&'static str, String); 5];
 type Gauge32 = Gauge<u32, AtomicU32>;
 type Gauge64 = Gauge<u64, AtomicU64>;
 type FloatGauge = Gauge<f64, AtomicU64>;
@@ -38,13 +39,16 @@ pub struct Counters {
 #[derive(Debug)]
 pub struct Metrics {
     hostname_label: String,
+    node_id_label: String,
     counters: Counters,
 }
 
 impl Metrics {
-    pub fn new(hostname: impl Into<String>) -> Self {
+    /// `node_id` may be empty; the label is then exported with an empty value.
+    pub fn new(hostname: &str, node_id: &str) -> Self {
         Self {
-            hostname_label: escape_label_value(&hostname.into()),
+            hostname_label: escape_label_value(hostname),
+            node_id_label: escape_label_value(node_id),
             counters: Counters::default(),
         }
     }
@@ -65,17 +69,33 @@ impl Metrics {
     fn register_gpu_metrics(&self, registry: &mut Registry, snapshot: &Snapshot) {
         let families = GpuFamilies::default();
         for sample in &snapshot.gpus {
-            families.record(&gpu_labels(&self.hostname_label, sample), sample);
+            families.record(&self.gpu_labels(sample), sample);
         }
         families.register(registry);
     }
 
+    fn gpu_labels(&self, sample: &GpuSample) -> GpuLabels {
+        [
+            (LABEL_GPU, sample.index.to_string()),
+            (LABEL_UUID, escape_label_value(&sample.uuid)),
+            (LABEL_MODEL, escape_label_value(&sample.model)),
+            (LABEL_HOSTNAME, self.hostname_label.clone()),
+            (LABEL_NODE_ID, self.node_id_label.clone()),
+        ]
+    }
+
     fn register_agent_metrics(&self, registry: &mut Registry, last_sample: UnixSeconds) {
-        let label = (
-            Cow::Borrowed(LABEL_HOSTNAME),
-            Cow::Owned(self.hostname_label.clone()),
-        );
-        let agent = registry.sub_registry_with_label(label);
+        let labels = [
+            (
+                Cow::Borrowed(LABEL_HOSTNAME),
+                Cow::Owned(self.hostname_label.clone()),
+            ),
+            (
+                Cow::Borrowed(LABEL_NODE_ID),
+                Cow::Owned(self.node_id_label.clone()),
+            ),
+        ];
+        let agent = registry.sub_registry_with_labels(labels.into_iter());
         agent.register(
             "gpu_agent_samples",
             "Successful backend samples",
@@ -94,15 +114,6 @@ impl Metrics {
             timestamp,
         );
     }
-}
-
-fn gpu_labels(hostname_label: &str, sample: &GpuSample) -> GpuLabels {
-    [
-        (LABEL_GPU, sample.index.to_string()),
-        (LABEL_UUID, escape_label_value(&sample.uuid)),
-        (LABEL_MODEL, escape_label_value(&sample.model)),
-        (LABEL_HOSTNAME, hostname_label.to_owned()),
-    ]
 }
 
 /// `prometheus_client` writes label values verbatim, so quotes, backslashes
@@ -175,6 +186,7 @@ mod tests {
     use crate::gpu::test_sample;
 
     const HOST: &str = "node-a";
+    const NODE_ID: &str = "node-009";
     const TAKEN_AT: UnixSeconds = 1_760_000_000;
 
     fn snapshot(gpus: Vec<GpuSample>) -> Snapshot {
@@ -185,7 +197,11 @@ mod tests {
     }
 
     fn render(snapshot: &Snapshot) -> String {
-        Metrics::new(HOST)
+        render_as(NODE_ID, snapshot)
+    }
+
+    fn render_as(node_id: &str, snapshot: &Snapshot) -> String {
+        Metrics::new(HOST, node_id)
             .render(snapshot)
             .expect("encoding succeeds")
     }
@@ -195,21 +211,23 @@ mod tests {
     }
 
     fn gpu0_labels() -> &'static str {
-        r#"{gpu="0",UUID="GPU-test-0",modelName="Test GPU",Hostname="node-a"}"#
+        r#"{gpu="0",UUID="GPU-test-0",modelName="Test GPU",Hostname="node-a",node_id="node-009"}"#
     }
 
-    #[test]
-    fn renders_a_healthy_gpu_exactly() {
-        let gpu = GpuSample {
+    fn healthy_gpu() -> GpuSample {
+        GpuSample {
             temperature_c: 62,
             power_w: 412.5,
             ..test_sample(0)
-        };
+        }
+    }
 
-        let body = render(&snapshot(vec![gpu]));
-
-        let labels = gpu0_labels();
-        let expected = format!(
+    fn expected_healthy_body(node_id: &str) -> String {
+        let labels = format!(
+            r#"{{gpu="0",UUID="GPU-test-0",modelName="Test GPU",Hostname="node-a",node_id="{node_id}"}}"#
+        );
+        let agent = format!(r#"{{Hostname="node-a",node_id="{node_id}"}}"#);
+        format!(
             "# HELP DCGM_FI_DEV_GPU_TEMP GPU temperature in degrees Celsius.
 # TYPE DCGM_FI_DEV_GPU_TEMP gauge
 DCGM_FI_DEV_GPU_TEMP{labels} 62
@@ -227,17 +245,31 @@ DCGM_FI_DEV_ECC_DBE_VOL_TOTAL{labels} 0
 gpu_agent_gpu_healthy{labels} 1
 # HELP gpu_agent_samples Successful backend samples.
 # TYPE gpu_agent_samples counter
-gpu_agent_samples_total{{Hostname=\"node-a\"}} 0
+gpu_agent_samples_total{agent} 0
 # HELP gpu_agent_sample_errors Failed backend samples.
 # TYPE gpu_agent_sample_errors counter
-gpu_agent_sample_errors_total{{Hostname=\"node-a\"}} 0
+gpu_agent_sample_errors_total{agent} 0
 # HELP gpu_agent_last_sample_timestamp_seconds Unix time of the last successful sample.
 # TYPE gpu_agent_last_sample_timestamp_seconds gauge
-gpu_agent_last_sample_timestamp_seconds{{Hostname=\"node-a\"}} 1760000000
+gpu_agent_last_sample_timestamp_seconds{agent} 1760000000
 # EOF
 "
-        );
-        assert_eq!(body, expected);
+        )
+    }
+
+    #[test]
+    fn renders_a_healthy_gpu_exactly_with_the_node_id() {
+        let body = render(&snapshot(vec![healthy_gpu()]));
+
+        assert_eq!(body, expected_healthy_body(NODE_ID));
+    }
+
+    #[test]
+    fn unset_node_id_renders_an_empty_label_on_every_metric() {
+        let body = render_as("", &snapshot(vec![healthy_gpu()]));
+
+        assert_eq!(body, expected_healthy_body(""));
+        assert_eq!(body.matches(r#"node_id="""#).count(), 8, "{body}");
     }
 
     #[test]
@@ -312,8 +344,8 @@ gpu_agent_last_sample_timestamp_seconds{{Hostname=\"node-a\"}} 1760000000
         assert_eq!(
             temps,
             [
-                r#"DCGM_FI_DEV_GPU_TEMP{gpu="0",UUID="GPU-test-0",modelName="Test GPU",Hostname="node-a"} 50"#,
-                r#"DCGM_FI_DEV_GPU_TEMP{gpu="1",UUID="GPU-test-1",modelName="Test GPU",Hostname="node-a"} 50"#,
+                r#"DCGM_FI_DEV_GPU_TEMP{gpu="0",UUID="GPU-test-0",modelName="Test GPU",Hostname="node-a",node_id="node-009"} 50"#,
+                r#"DCGM_FI_DEV_GPU_TEMP{gpu="1",UUID="GPU-test-1",modelName="Test GPU",Hostname="node-a",node_id="node-009"} 50"#,
             ],
             "{body}"
         );
@@ -349,17 +381,17 @@ gpu_agent_last_sample_timestamp_seconds{{Hostname=\"node-a\"}} 1760000000
         assert!(!body.contains("gpu_agent_gpu_healthy"), "{body}");
         assert!(has_line(
             &body,
-            r#"gpu_agent_last_sample_timestamp_seconds{Hostname="node-a"} 0"#
+            r#"gpu_agent_last_sample_timestamp_seconds{Hostname="node-a",node_id="node-009"} 0"#
         ));
         assert!(has_line(
             &body,
-            r#"gpu_agent_samples_total{Hostname="node-a"} 0"#
+            r#"gpu_agent_samples_total{Hostname="node-a",node_id="node-009"} 0"#
         ));
     }
 
     #[test]
     fn counters_are_read_at_scrape_time() {
-        let metrics = Metrics::new(HOST);
+        let metrics = Metrics::new(HOST, NODE_ID);
         metrics.counters().samples.inc();
         metrics.counters().samples.inc();
         metrics.counters().errors.inc();
@@ -369,13 +401,16 @@ gpu_agent_last_sample_timestamp_seconds{{Hostname=\"node-a\"}} 1760000000
             .expect("encoding succeeds");
 
         assert!(
-            has_line(&body, r#"gpu_agent_samples_total{Hostname="node-a"} 2"#),
+            has_line(
+                &body,
+                r#"gpu_agent_samples_total{Hostname="node-a",node_id="node-009"} 2"#
+            ),
             "{body}"
         );
         assert!(
             has_line(
                 &body,
-                r#"gpu_agent_sample_errors_total{Hostname="node-a"} 1"#
+                r#"gpu_agent_sample_errors_total{Hostname="node-a",node_id="node-009"} 1"#
             ),
             "{body}"
         );
@@ -398,12 +433,19 @@ gpu_agent_last_sample_timestamp_seconds{{Hostname=\"node-a\"}} 1760000000
 
     #[test]
     fn hostname_label_is_escaped_on_every_metric() {
-        let metrics = Metrics::new("bad\"host");
+        let metrics = Metrics::new("bad\"host", NODE_ID);
 
         let body = metrics
             .render(&snapshot(vec![test_sample(0)]))
             .expect("encoding succeeds");
 
         assert_eq!(body.matches(r#"Hostname="bad\"host""#).count(), 8, "{body}");
+    }
+
+    #[test]
+    fn node_id_label_is_escaped_on_every_metric() {
+        let body = render_as("q\"b\\n\nx", &snapshot(vec![test_sample(0)]));
+
+        assert_eq!(body.matches(r#"node_id="q\"b\\n\nx""#).count(), 8, "{body}");
     }
 }

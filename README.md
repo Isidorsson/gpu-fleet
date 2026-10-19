@@ -6,7 +6,7 @@ reservations and GPU health, runnable on a laptop against a simulated fleet.
 ```
 controlplane/   Go: lifecycle state machine, provisioning + capacity APIs
 agent/          Rust: per-node GPU health agent (NVML, fake backend for dev)
-deploy/         docker compose: Postgres, GPU agents, Prometheus + alerts, Grafana
+deploy/         docker compose: Postgres, GPU agents, Prometheus + alerts, Alertmanager, Grafana
 docs/adr/       architecture decision records
 ```
 
@@ -113,16 +113,55 @@ has the threat model and maps every simulated piece to TPM 2.0, NVIDIA and
 IETF RATS equivalents. Inject an implant into a simulated node with
 `curl -u sim:sim-dev-only -X POST localhost:8443/sim/systems/node-007/tamper -d '{"component":"bootloader"}'`.
 
+## Automated remediation
+
+A fatal GPU XID quarantines the node without a human sending an event:
+
+```
+agent (node_id label) -> Prometheus GPUFatalXid -> Alertmanager
+  -> POST /v1/alerts (bearer token) -> control plane -> node quarantined
+  -> reconciler replaces it for the tenant, if one holds it
+```
+
+Alertmanager routes `GPUFatalXid` to the control plane webhook and drops
+everything else. Resolved alerts never un-quarantine a node: repair is a human
+decision (`repaired` event). At most 5 nodes per 10 minutes are quarantined this
+way; beyond that the outcome is `rate_limited` and the `RemediationRateLimited`
+alert pages instead, so one noisy rule cannot empty the fleet. Every handled
+alert is recorded with its outcome. Contract: [docs/remediation.md](docs/remediation.md).
+
+Demo, with the stack, bmcsim, the seeded fleet and the control plane running
+(the compose agents are `node-001` to `node-004`, published on host ports
+19401 to 19404):
+
+```bash
+curl -X POST localhost:19403/fake/xid -d '{"gpu":3,"code":79}'
+```
+
+About a minute and a half later (`for: 1m`, Alertmanager `group_wait: 10s`)
+`node-003` is quarantined and the action is recorded:
+
+```bash
+curl -s localhost:8080/v1/remediations
+```
+
+Clear the fault, as a GPU reset would:
+
+```bash
+curl -X DELETE localhost:19403/fake/xid
+```
+
 ## Develop
 
 ```bash
 docker compose -f deploy/compose.yaml up -d
 ```
 
-This starts Postgres, Prometheus, Grafana and the GPU agents (3 `agent`
-replicas plus `agent-faulty`, which injects XID 79 on GPU 3), all on the fake
-GPU backend. The control plane runs on the host. Start only the observability
-side with `docker compose -f deploy/compose.yaml up -d prometheus grafana`.
+This starts Postgres, Prometheus, Alertmanager, Grafana and four GPU agents
+(`agent-node-001` to `agent-node-004`, one per simulated host `node-001` to
+`node-004`), all on the fake GPU backend. The control plane runs on the host.
+Start only the observability side with
+`docker compose -f deploy/compose.yaml up -d prometheus alertmanager grafana`.
 
 Simulated fleet (50 nodes, 5% inspection failures, 1% flaky BMC requests):
 
@@ -131,10 +170,13 @@ cd controlplane && BMCSIM_USER=sim BMCSIM_PASSWORD=sim-dev-only go run ./cmd/bmc
 ```
 
 Control plane with 4 workers (`PROVISIONER_WORKERS`, 0 disables them). It
-needs an attestation signing key, a base64 Ed25519 seed:
+needs an attestation signing key, a base64 Ed25519 seed, and the bearer token
+Alertmanager sends to the remediation webhook. The dev token is the content of
+`deploy/alertmanager/webhook_token`:
 
 ```bash
 export ATTEST_SIGNING_KEY=$(head -c 32 /dev/urandom | base64)
+export REMEDIATION_WEBHOOK_TOKEN=remediation-dev-only
 ```
 
 ```bash
@@ -165,7 +207,7 @@ cd agent && cargo test && FAKE_XID=3:79 cargo run
 ```
 
 An agent run on the host is not scraped: Prometheus discovers the compose
-`agent` services only.
+agents only (DNS name `agent`).
 
 Grafana: http://localhost:3000 (anonymous, opens on the GPU Fleet dashboard),
 Prometheus: http://localhost:9090.
@@ -174,20 +216,24 @@ Prometheus: http://localhost:9090.
 
 [docs/metrics.md](docs/metrics.md) is the contract for every metric, dashboard
 query and alert. Prometheus scrapes the control plane at
-`host.docker.internal:8080` and the agents on :9400 (DNS A records for the
-`agent` and `agent-faulty` services).
+`host.docker.internal:8080` and the agents on :9400 (the DNS name `agent`
+resolves to all four), and sends alerts to Alertmanager at
+http://localhost:9093.
 
 ```
 deploy/prometheus/prometheus.yml    scrape config
 deploy/prometheus/alerts.yml        alert rules (see localhost:9090/alerts)
 deploy/prometheus/alerts_test.yml   promtool unit tests for the rules
+deploy/alertmanager/                routing config and the dev-only webhook token
 deploy/grafana/                     provisioned datasource and the GPU Fleet dashboard
 ```
 
-`agent-faulty` makes `GPUFatalXid` fire about a minute after startup. The
+No agent injects a fault on its own: see
+[Automated remediation](#automated-remediation) to fire `GPUFatalXid`. The
 `observability` CI job runs `promtool check config`, `check rules` and
-`test rules` from the pinned Prometheus image, and checks that every dashboard
-panel queries the `prometheus` datasource. To run the same checks locally:
+`test rules` from the pinned Prometheus image, `amtool check-config` from the
+pinned Alertmanager image, and checks that every dashboard panel queries the
+`prometheus` datasource. To run the same checks locally:
 
 ```bash
 image=$(docker compose -f deploy/compose.yaml config --images | grep '^prom/prometheus:')
@@ -195,6 +241,8 @@ promtool() { docker run --rm --entrypoint promtool -v "$PWD/deploy/prometheus:/e
 promtool check config /etc/prometheus/prometheus.yml
 promtool check rules /etc/prometheus/alerts.yml
 promtool test rules /etc/prometheus/alerts_test.yml
+image=$(docker compose -f deploy/compose.yaml config --images | grep '^prom/alertmanager:')
+docker run --rm --entrypoint amtool -v "$PWD/deploy/alertmanager:/etc/alertmanager:ro" "$image" check-config /etc/alertmanager/alertmanager.yml
 ```
 
 On Windows Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1`.
@@ -205,4 +253,6 @@ On Windows Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1`.
 2. ~~Simulated Redfish BMC fleet + provisioner workers~~
 3. ~~Agent `/metrics` exporter on :9400, Grafana dashboard~~
 4. ~~Capacity reservations with topology awareness~~
-5. ~~Tenant attestation~~ (a Kubernetes remediation operator is the remaining stretch goal)
+5. ~~Tenant attestation~~
+6. ~~Automated remediation (Alertmanager to quarantine to replacement)~~
+7. Kubernetes deployment (kind + kustomize, CI smoke test)

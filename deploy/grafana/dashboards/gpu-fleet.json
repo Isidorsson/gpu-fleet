@@ -54,7 +54,7 @@
       "type": "timeseries",
       "title": "Nodes by state",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -109,7 +109,7 @@
       "title": "Quarantined",
       "description": "Nodes currently in the quarantined state.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -151,7 +151,7 @@
       "title": "Unhealthy GPUs",
       "description": "GPUs reporting gpu_agent_gpu_healthy 0: uncorrected ECC errors or a fatal XID.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -192,7 +192,7 @@
       "title": "Attestation failures (24h)",
       "description": "Nodes that failed tenant attestation over the last 24 hours. Each one is quarantined as attestation_failed.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -229,12 +229,55 @@
       ]
     },
     {
+      "id": 20,
+      "type": "stat",
+      "title": "Auto-quarantined (24h)",
+      "description": "Nodes the remediation webhook took out of service over the last 24 hours, after a fatal GPU error. Rate-limited alerts are not counted: they page RemediationRateLimited.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "refId": "A",
+          "expr": "sum(increase(remediation_actions_total{outcome=\"quarantined\"}[24h]))",
+          "legendFormat": "auto-quarantined",
+          "range": true,
+          "instant": false
+        }
+      ]
+    },
+    {
       "id": 5,
       "type": "bargauge",
       "title": "Quarantine causes (15m)",
       "description": "Events that move a node towards quarantine, over the last 15 minutes.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 5 },
+      "gridPos": { "h": 4, "w": 16, "x": 8, "y": 5 },
       "fieldConfig": {
         "defaults": {
           "unit": "short",

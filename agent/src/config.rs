@@ -10,6 +10,7 @@ use crate::fake::InjectedXid;
 const LISTEN_VAR: &str = "AGENT_LISTEN";
 const SAMPLE_INTERVAL_VAR: &str = "AGENT_SAMPLE_INTERVAL_SECS";
 const HOSTNAME_VAR: &str = "AGENT_HOSTNAME";
+const NODE_ID_VAR: &str = "AGENT_NODE_ID";
 const SYSTEM_HOSTNAME_VAR: &str = "HOSTNAME";
 const FAKE_GPUS_VAR: &str = "FAKE_GPUS";
 const FAKE_XID_VAR: &str = "FAKE_XID";
@@ -25,6 +26,8 @@ pub struct Config {
     pub listen: SocketAddr,
     pub sample_interval: Duration,
     pub hostname: String,
+    /// Control-plane node ID, empty when unset.
+    pub node_id: String,
     pub fake_gpus: usize,
     pub fake_xid: Option<InjectedXid>,
 }
@@ -45,6 +48,7 @@ impl Config {
                 parse_interval_secs,
             )?),
             hostname: vars.hostname()?,
+            node_id: vars.optional(NODE_ID_VAR)?.unwrap_or_default(),
             fake_gpus,
             fake_xid: vars.fake_xid(fake_gpus)?,
         })
@@ -189,6 +193,7 @@ mod tests {
                 listen: "0.0.0.0:9400".parse().expect("literal"),
                 sample_interval: Duration::from_secs(5),
                 hostname: "localhost".to_owned(),
+                node_id: String::new(),
                 fake_gpus: 8,
                 fake_xid: None,
             }
@@ -201,6 +206,7 @@ mod tests {
             ("AGENT_LISTEN", "127.0.0.1:9500"),
             ("AGENT_SAMPLE_INTERVAL_SECS", "15"),
             ("AGENT_HOSTNAME", "node-b"),
+            ("AGENT_NODE_ID", "node-009"),
             ("FAKE_GPUS", "4"),
             ("FAKE_XID", "2:79"),
         ])
@@ -208,6 +214,7 @@ mod tests {
         assert_eq!(config.listen, "127.0.0.1:9500".parse().expect("literal"));
         assert_eq!(config.sample_interval, Duration::from_secs(15));
         assert_eq!(config.hostname, "node-b");
+        assert_eq!(config.node_id, "node-009");
         assert_eq!(config.fake_gpus, 4);
         assert_eq!(config.fake_xid, Some(InjectedXid { gpu: 2, code: 79 }));
     }
@@ -237,11 +244,41 @@ mod tests {
             ("AGENT_LISTEN", ""),
             ("AGENT_SAMPLE_INTERVAL_SECS", "  "),
             ("AGENT_HOSTNAME", ""),
+            ("AGENT_NODE_ID", "  "),
             ("FAKE_GPUS", ""),
             ("FAKE_XID", ""),
         ])
         .expect("blank means default");
         assert_eq!(config, config_from(&[]).expect("defaults"));
+    }
+
+    #[test]
+    fn node_id_defaults_to_empty() {
+        assert_eq!(config_from(&[]).expect("valid").node_id, "");
+    }
+
+    #[test]
+    fn node_id_is_trimmed_and_independent_of_hostname() {
+        let config = config_from(&[
+            ("AGENT_NODE_ID", "  node-003 "),
+            ("AGENT_HOSTNAME", "gpu-01"),
+        ])
+        .expect("valid");
+        assert_eq!(config.node_id, "node-003");
+        assert_eq!(config.hostname, "gpu-01");
+    }
+
+    #[test]
+    fn non_unicode_node_id_is_rejected() {
+        let err = Config::from_vars(|name| match name {
+            "AGENT_NODE_ID" => Err(VarError::NotUnicode("bad".into())),
+            _ => Err(VarError::NotPresent),
+        })
+        .expect_err("not unicode");
+        assert_eq!(
+            err.to_string(),
+            "invalid AGENT_NODE_ID=\"bad\": not valid unicode"
+        );
     }
 
     #[test]

@@ -111,7 +111,26 @@ CREATE TABLE attestations (
 
 CREATE INDEX attestations_node_id_idx ON attestations (node_id, id);
 
+-- Audit log of automated remediation, written under the remediation advisory
+-- lock. node_id is not a foreign key: alerts about unknown nodes are recorded
+-- too. Ignored alerts never reach the store, so they have no outcome here.
+-- The (outcome, at) index serves the rate limit's count of recent quarantines.
+CREATE TABLE remediation_actions (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    node_id     text NOT NULL,
+    alertname   text NOT NULL,
+    fingerprint text NOT NULL,
+    action      text NOT NULL,
+    outcome     text NOT NULL CHECK (outcome IN (
+                    'quarantined', 'already_quarantined', 'not_applicable',
+                    'unknown_node', 'rate_limited')),
+    at          timestamptz NOT NULL
+);
+
+CREATE INDEX remediation_actions_outcome_at_idx ON remediation_actions (outcome, at);
+
 -- +goose Down
+DROP TABLE remediation_actions;
 DROP TABLE attestations;
 DROP TABLE attestation_nonces;
 DROP TABLE reservation_nodes;
