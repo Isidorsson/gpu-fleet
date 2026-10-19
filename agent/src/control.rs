@@ -114,7 +114,7 @@ mod tests {
         let response = f.post(r#"{"gpu": 2, "code": 79}"#).await;
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        assert!(body_text(response).await.is_empty());
+        assert_eq!(body_text(response).await, "");
         let samples = f.samples();
         assert!(!samples[2].is_healthy());
         assert_eq!(samples[2].latest_xid(), 79);
@@ -157,7 +157,7 @@ mod tests {
         let response = f.send(Method::DELETE, "").await;
 
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        assert!(body_text(response).await.is_empty());
+        assert_eq!(body_text(response).await, "");
         let samples = f.samples();
         assert!(samples.iter().all(GpuSample::is_healthy));
         assert!(samples.iter().all(|s| s.latest_xid() == 0));

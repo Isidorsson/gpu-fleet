@@ -424,6 +424,6 @@ mod tests {
 
     #[test]
     fn zero_gpus_yields_no_samples() {
-        assert!(sample_at(&FakeBackend::new(0, HOST), 0).is_empty());
+        assert_eq!(sample_at(&FakeBackend::new(0, HOST), 0), Vec::new());
     }
 }
