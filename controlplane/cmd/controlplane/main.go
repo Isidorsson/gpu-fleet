@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -41,10 +40,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	addr := os.Getenv("CONTROLPLANE_ADDR")
-	if addr == "" {
-		addr = defaultAddr
-	}
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		return errors.New("DATABASE_URL is required")
@@ -100,28 +95,9 @@ func run() error {
 		WebhookToken:   remediator.token,
 		Log:            log,
 	})
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           newHandler(apiHandler, m.Handler()),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	errc := make(chan error, 1)
-	go func() {
-		log.Info("controlplane listening", "addr", addr)
-		errc <- srv.ListenAndServe()
-	}()
-
-	select {
-	case err := <-errc:
-		stop()
-		return fmt.Errorf("serve: %w", err)
-	case <-ctx.Done():
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("shutdown: %w", err)
-	}
-	return nil
+	err = serve(ctx, listeners(newHandler(apiHandler, m.Handler())), log)
+	// A failed listener must also stop the workers and reconciler, or the
+	// deferred Waits block forever.
+	stop()
+	return err
 }
