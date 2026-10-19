@@ -129,13 +129,14 @@ section > header { display: grid; gap: 8px; }
 
 /* Architecture */
 .arch { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
-.arch pre { margin: 0; }
+.arch pre { margin: 0; min-width: 720px; }
+.arch svg { max-width: none !important; height: auto; }
 
 /* Try it */
-.try { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+.try { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 20px; }
 .cmd { display: grid; gap: 8px; min-width: 0; }
-.code { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; padding-right: 64px; overflow-x: auto; }
-.code pre { margin: 0; font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; white-space: pre; }
+.code { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; padding-right: 72px; }
+.code pre { margin: 0; font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .copy { position: absolute; top: 8px; right: 8px; font: inherit; font-size: 0.75rem; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
 
 /* Stack */
@@ -379,7 +380,7 @@ docker compose -f deploy/compose.yaml --profile demo up -d --build</pre><button 
   (function () {
     const dark = document.documentElement.dataset.theme === "dark" ||
       (!document.documentElement.dataset.theme && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral", securityLevel: "strict" });
+    mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral", securityLevel: "strict", flowchart: { useMaxWidth: false }, themeVariables: { fontSize: "15px" } });
   })();
 </script>
 
