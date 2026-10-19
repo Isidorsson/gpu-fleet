@@ -8,6 +8,20 @@ on:
 jobs:
   controlplane:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_USER: fleet
+          POSTGRES_PASSWORD: fleet-ci-only
+          POSTGRES_DB: fleet
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fleet"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://fleet:fleet-ci-only@localhost:5432/fleet?sslmode=disable
     defaults:
       run:
         working-directory: controlplane
@@ -16,7 +30,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: controlplane/go.mod
-          cache: false # no go.sum until the first dependency lands
+          cache-dependency-path: controlplane/go.sum
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race ./...
