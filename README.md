@@ -6,12 +6,15 @@ A control plane for bare-metal GPU clouds: node lifecycle, topology-aware
 capacity reservations, tenant attestation and automated remediation. It runs on
 a laptop against a simulated fleet.
 
+**[Project page](https://isidorsson.github.io/gpu-fleet/)** · [Live dashboard](https://grafana-production-6e71.up.railway.app) · [Live API](https://controlplane-production-6f4e.up.railway.app/v1/capacity)
+
 ## Live demo
 
 A read-only deployment on Railway, kept busy around the clock by a chaos
 service: nodes get implants and GPU faults, the platform catches them,
 quarantines the nodes, replaces them for tenants and repairs them.
 
+- Project page with a walkthrough of the recorded incidents: https://isidorsson.github.io/gpu-fleet/
 - Grafana dashboard (anonymous viewer): https://grafana-production-6e71.up.railway.app
 - Control plane API (GET only): https://controlplane-production-6f4e.up.railway.app
 
@@ -81,6 +84,7 @@ controlplane/   Go: lifecycle state machine, provisioner, reservations, attestat
 agent/          Rust: per-node GPU health agent, dcgm-exporter compatible metrics (simulated GPUs)
 deploy/         docker compose: Postgres, GPU agents, Prometheus + alerts, Alertmanager, Grafana, demo profile
 deploy/railway/ images and configs for the hosted demo
+site/           project page, deployed to GitHub Pages
 docs/           architecture, development guide and component contracts
 docs/adr/       architecture decision records
 ```

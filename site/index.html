@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="gpu-fleet: a bare-metal GPU cloud control plane with topology-aware reservations, tenant attestation and automated remediation. Live demo and source.">
+<title>gpu-fleet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single technical sheet. Rack elevation as the hero, then the two
+   recorded incidents as timelines, then decisions, architecture and how to try it. */
+:root {
+  --bg: #eef1f4;
+  --panel: #ffffff;
+  --ink: #16202b;
+  --muted: #566372;
+  --line: #d3dae2;
+  --accent: #b5652a;          /* copper: cabling, tenant-owned */
+  --accent-ink: #8f4c1c;
+  --ok: #2f8a57;
+  --busy: #2f6fb3;
+  --warn: #c48a12;
+  --bad: #c2413a;
+  --idle: #b9c2cc;
+  --rack: #1d2733;
+  --rack-edge: #2c3846;
+  --code-bg: #f6f8fa;
+  --display: "Big Shoulders Display", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151c; --panel: #161e27; --ink: #e3e8ee; --muted: #93a1b0; --line: #26313d;
+    --accent: #d98a4e; --accent-ink: #e9a571; --ok: #4cb37a; --busy: #5b9be0; --warn: #e0a83a;
+    --bad: #e2645c; --idle: #3a4654; --rack: #0b1015; --rack-edge: #222c37; --code-bg: #111820;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151c; --panel: #161e27; --ink: #e3e8ee; --muted: #93a1b0; --line: #26313d;
+  --accent: #d98a4e; --accent-ink: #e9a571; --ok: #4cb37a; --busy: #5b9be0; --warn: #e0a83a;
+  --bad: #e2645c; --idle: #3a4654; --rack: #0b1015; --rack-edge: #222c37; --code-bg: #111820;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--body);
+  font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.sheet { max-width: 1040px; margin: 0 auto; padding-block: 40px 64px; display: grid; gap: 64px; }
+h1, h2 { font-family: var(--display); font-weight: 800; letter-spacing: 0.01em; text-wrap: balance; margin: 0; line-height: 1.05; }
+h1 { font-size: clamp(3rem, 9vw, 5.5rem); text-transform: uppercase; }
+h2 { font-size: clamp(1.8rem, 4vw, 2.4rem); text-transform: uppercase; }
+h3 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+p { margin: 0; max-width: 65ch; }
+a { color: var(--accent-ink); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+.label { font-family: var(--mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+section { display: grid; gap: 20px; }
+section > header { display: grid; gap: 8px; }
+
+/* Hero */
+.hero { display: grid; gap: 28px; }
+.pitch { font-size: 1.15rem; max-width: 60ch; }
+.links { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink); text-decoration: none;
+  font-weight: 500; font-size: 0.95rem;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn:hover { border-color: var(--accent); }
+
+/* Rack elevation */
+.floor { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 16px; }
+.floor-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: baseline; }
+.pods { display: flex; gap: 20px; overflow-x: auto; padding-bottom: 4px; }
+.pod { display: grid; gap: 8px; flex: none; }
+.pod-racks { display: flex; gap: 10px; }
+.rack { background: var(--rack); border: 1px solid var(--rack-edge); border-radius: 6px; padding: 8px 7px; display: grid; gap: 4px; width: 92px; align-content: start; }
+.rack-name { font-family: var(--mono); font-size: 0.7rem; color: #9aa7b5; text-align: center; letter-spacing: 0.06em; }
+.unit {
+  height: 22px; border-radius: 3px; background: #26313d; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 6px; font-family: var(--mono); font-size: 0.62rem; color: #c7d0da;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+.unit.empty { background: transparent; border: 1px dashed #33404e; }
+.led { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); flex: none; }
+.unit[data-s="available"] .led { background: var(--ok); }
+.unit[data-s="active"] .led { background: var(--accent); }
+.unit[data-s="active"] { background: #3a2a1e; }
+.unit[data-s="inspecting"] .led, .unit[data-s="provisioning"] .led { background: var(--busy); }
+.unit[data-s="wiping"] .led { background: var(--warn); }
+.unit[data-s="quarantined"] .led { background: var(--bad); }
+.unit[data-s="quarantined"] { background: #3c1f1e; }
+.unit.hot { box-shadow: 0 0 0 2px var(--bad); }
+.unit.new { box-shadow: 0 0 0 2px var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.82rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .led { display: inline-block; }
+.caption { display: grid; grid-template-columns: auto 1fr; gap: 10px 16px; align-items: start; border-top: 1px solid var(--line); padding-top: 14px; min-height: 3.2em; }
+.caption .t { font-family: var(--mono); font-size: 0.85rem; color: var(--accent-ink); white-space: nowrap; }
+.caption .d { min-width: 0; }
+.controls { display: flex; gap: 8px; align-items: center; }
+.controls button { font: inherit; font-size: 0.85rem; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; }
+
+/* Incidents */
+.incidents { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+.incident { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 14px; align-content: start; }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.timeline li { display: grid; grid-template-columns: 74px 1fr; gap: 12px; padding: 8px 0; border-top: 1px dashed var(--line); }
+.timeline li:first-child { border-top: 0; }
+.timeline .when { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.timeline .what { min-width: 0; font-size: 0.95rem; }
+.ev { font-family: var(--mono); font-size: 0.82em; padding: 1px 6px; border-radius: 4px; background: var(--code-bg); border: 1px solid var(--line); white-space: nowrap; }
+.ev.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, var(--line)); }
+.ev.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+
+/* Decisions */
+.decisions { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0 32px; }
+.decision { display: grid; gap: 6px; padding: 16px 0; border-top: 1px solid var(--line); }
+.decision p { color: var(--muted); font-size: 0.95rem; }
+
+/* Architecture */
+.arch { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+.arch pre { margin: 0; }
+
+/* Try it */
+.try { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+.cmd { display: grid; gap: 8px; min-width: 0; }
+.code { position: relative; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; padding-right: 64px; overflow-x: auto; }
+.code pre { margin: 0; font-family: var(--mono); font-size: 0.82rem; line-height: 1.55; white-space: pre; }
+.copy { position: absolute; top: 8px; right: 8px; font: inherit; font-size: 0.75rem; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+
+/* Stack */
+.stack { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font-family: var(--mono); font-size: 0.8rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); }
+
+footer { border-top: 1px solid var(--line); padding-top: 20px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; color: var(--muted); font-size: 0.9rem; }
+
+@media (prefers-reduced-motion: reduce) { .unit { transition: none; } }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+img { max-width: 100%; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <section class="hero" aria-labelledby="title">
+    <div class="label">Bare-metal GPU cloud control plane · Go + Rust</div>
+    <h1 id="title">gpu-fleet</h1>
+    <p class="pitch">Software that turns racks of GPU servers into something tenants can reserve: it provisions nodes over Redfish, places reservations by fabric topology, proves to each tenant that the previous one left nothing behind, and pulls failing GPUs out of service on its own. A simulated fleet makes all of it run on a laptop or on the live demo below.</p>
+    <div class="links">
+      <a class="btn primary" href="https://grafana-production-6e71.up.railway.app" target="_blank" rel="noopener">Live dashboard</a>
+      <a class="btn" href="https://controlplane-production-6f4e.up.railway.app/v1/capacity" target="_blank" rel="noopener">Live API</a>
+      <a class="btn" href="https://github.com/Isidorsson/gpu-fleet" target="_blank" rel="noopener">Source on GitHub</a>
+    </div>
+
+    <div class="floor" aria-label="Rack elevation of the simulated fleet">
+      <div class="floor-head">
+        <div class="label">Fleet floor · 50 nodes · 2 pods · 7 racks · illustration</div>
+        <div class="controls">
+          <button type="button" id="play">Replay incidents</button>
+        </div>
+      </div>
+      <div class="pods" id="pods"></div>
+      <div class="legend">
+        <span><i class="led" style="background:var(--ok)"></i>available</span>
+        <span><i class="led" style="background:var(--accent)"></i>tenant workload</span>
+        <span><i class="led" style="background:var(--busy)"></i>inspecting / provisioning</span>
+        <span><i class="led" style="background:var(--warn)"></i>wiping</span>
+        <span><i class="led" style="background:var(--bad)"></i>quarantined</span>
+      </div>
+      <div class="caption" aria-live="polite"><span class="t" id="cap-t">steady state</span><span class="d" id="cap-d">Tenant <span class="mono">acme</span> holds 12 nodes in pod p2, placed best-fit so whole racks in p1 stay free for rack-scale requests. Press replay to watch the two incidents below play out.</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="incidents">
+    <header>
+      <div class="label">Recorded from live runs</div>
+      <h2 id="incidents">Two incidents, no operator</h2>
+    </header>
+    <div class="incidents">
+      <article class="incident">
+        <h3>A GPU fails under a running tenant</h3>
+        <ol class="timeline">
+          <li><span class="when">12:29:08</span><span class="what">The node's agent reports <span class="ev bad">XID 79</span> on GPU 3: the GPU fell off the bus.</span></li>
+          <li><span class="when">12:29:21</span><span class="what">Prometheus sees <span class="mono">gpu_agent_gpu_healthy == 0</span>; <span class="ev">GPUFatalXid</span> goes pending.</span></li>
+          <li><span class="when">12:30:36</span><span class="what">Alertmanager calls the authenticated webhook; the node gets <span class="ev bad">hardware_fault</span> and is quarantined.</span></li>
+          <li><span class="when">12:30:38</span><span class="what">The reservation reconciler marks the reservation degraded and provisions a replacement in the same pod.</span></li>
+        </ol>
+        <p class="label">88 s from fault to quarantine · replacement 2 s later</p>
+      </article>
+      <article class="incident">
+        <h3>A tenant leaves an implant behind</h3>
+        <ol class="timeline">
+          <li><span class="when">active</span><span class="what">While renting the node, the tenant modifies its kernel image. Disk wipes cannot remove this.</span></li>
+          <li><span class="when">release</span><span class="what">The reservation ends; the node is wiped: <span class="ev ok">wipe_succeeded</span>.</span></li>
+          <li><span class="when">inspect</span><span class="what">Re-inspection boots the node and requests a nonce-bound TPM-style quote and GPU reports.</span></li>
+          <li><span class="when">verify</span><span class="what">The event log replays to the quoted PCRs, but the kernel digest is not in the reference values: <span class="ev bad">attestation_failed</span>.</span></li>
+        </ol>
+        <p class="label">quarantined before any other tenant can get it · signed result verifiable offline</p>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="decisions">
+    <header>
+      <div class="label">Design</div>
+      <h2 id="decisions">Decisions worth asking about</h2>
+    </header>
+    <div class="decisions">
+      <div class="decision"><h3>Pure lifecycle core, database as backstop</h3><p>Node states are a pure state machine. Postgres CHECK constraints repeat its invariants, so a bug elsewhere cannot leave an active node without a tenant.</p></div>
+      <div class="decision"><h3>Leases with fencing</h3><p>Workers claim nodes with <code>FOR UPDATE SKIP LOCKED</code>. A result is applied only while the worker still holds the lease, so a stalled worker cannot overwrite its successor.</p></div>
+      <div class="decision"><h3>No double booking, by constraint</h3><p>An exclusion constraint on <code>(node_id, period)</code> rejects overlapping reservations in the database itself; losing a placement race becomes a retry, not a bug.</p></div>
+      <div class="decision"><h3>Attestation that fails closed</h3><p>The verifier checks every source of evidence and reports every failure. A policy file that omits the confidential-computing requirement is rejected, not read as "off".</p></div>
+      <div class="decision"><h3>Remediation with a blast radius</h3><p>Automatic quarantines are capped at 5 per 10 minutes, counted in the audit table under an advisory lock, so the cap holds across replicas and one noisy rule cannot empty the fleet.</p></div>
+      <div class="decision"><h3>Read-only public demo, by construction</h3><p>The control plane serves the full API on a private listener and a GET-only copy on the public one. The public side has no route to a write path at all.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="arch">
+    <header>
+      <div class="label">Architecture</div>
+      <h2 id="arch">How the pieces connect</h2>
+    </header>
+    <div class="arch">
+<pre class="mermaid">
+flowchart LR
+  agent["gpu-agent (Rust)<br/>dcgm-exporter metrics"] -->|scrape| prom[Prometheus]
+  prom -->|GPUFatalXid| am[Alertmanager]
+  am -->|webhook| cp["control plane (Go)"]
+  cp <--> pg[(Postgres)]
+  cp -->|Redfish + in-band agent| bmc["bmcsim<br/>50 simulated nodes"]
+  cp -.->|reconciler| cp
+  chaos[chaos service] -->|reservations, implants, XIDs| cp
+  prom --> graf[Grafana]
+</pre>
+    </div>
+  </section>
+
+  <section aria-labelledby="try">
+    <header>
+      <div class="label">Try it</div>
+      <h2 id="try">Poke the live system</h2>
+      <p>The public API is read-only. Every attestation result is signed, so you can check it against the published key without trusting the API.</p>
+    </header>
+    <div class="try">
+      <div class="cmd">
+        <div class="label">Free capacity per pod</div>
+        <div class="code"><pre id="c1">curl -s https://controlplane-production-6f4e.up.railway.app/v1/capacity</pre><button class="copy" type="button" data-for="c1">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="label">Automatic quarantines</div>
+        <div class="code"><pre id="c2">curl -s https://controlplane-production-6f4e.up.railway.app/v1/remediations</pre><button class="copy" type="button" data-for="c2">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="label">A node's signed attestation result</div>
+        <div class="code"><pre id="c3">curl -s https://controlplane-production-6f4e.up.railway.app/v1/nodes/node-001/attestation</pre><button class="copy" type="button" data-for="c3">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="label">Run everything locally</div>
+        <div class="code"><pre id="c4">git clone https://github.com/Isidorsson/gpu-fleet
+cd gpu-fleet
+docker compose -f deploy/compose.yaml --profile demo up -d --build</pre><button class="copy" type="button" data-for="c4">Copy</button></div>
+      </div>
+    </div>
+    <div class="stack" aria-label="Technology">
+      <span class="chip">Go 1.27</span><span class="chip">Rust · axum · tokio</span><span class="chip">Postgres · pgx · goose</span>
+      <span class="chip">Prometheus · Alertmanager · Grafana</span><span class="chip">Redfish</span><span class="chip">Ed25519 · SHA-256</span>
+      <span class="chip">Docker · Railway</span><span class="chip">GitHub Actions</span>
+    </div>
+  </section>
+
+  <footer>
+    <span>gpu-fleet · simulated hardware, real control plane</span>
+    <span><a href="https://github.com/Isidorsson/gpu-fleet" target="_blank" rel="noopener">github.com/Isidorsson/gpu-fleet</a></span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  // Layout matches deploy/seed.sh: 8 nodes per rack, r1-r4 in p1, r5-r7 in p2.
+  const PER_RACK = 8, P1_RACKS = 4, NODES = 50;
+  const id = n => "node-" + String(n).padStart(3, "0");
+  const state = {};
+  for (let n = 1; n <= NODES; n++) state[id(n)] = "available";
+  // Steady state: acme holds 12 nodes in p2, two nodes quarantined from earlier.
+  ["node-033","node-034","node-035","node-036","node-037","node-038","node-039","node-040","node-041","node-042","node-049","node-050"]
+    .forEach(n => state[n] = "active");
+  state["node-017"] = "quarantined";
+  state["node-044"] = "inspecting";
+
+  const pods = document.getElementById("pods");
+  const units = {};
+  function build() {
+    const racks = Math.ceil(NODES / PER_RACK);
+    const podEls = { p1: el("div", "pod"), p2: el("div", "pod") };
+    for (const p of ["p1", "p2"]) {
+      const lab = el("div", "label"); lab.textContent = "pod " + p;
+      podEls[p].append(lab, Object.assign(el("div", "pod-racks"), { id: "racks-" + p }));
+      pods.append(podEls[p]);
+    }
+    for (let r = 1; r <= racks; r++) {
+      const rack = el("div", "rack");
+      const name = el("div", "rack-name"); name.textContent = "r" + r;
+      rack.append(name);
+      for (let u = 0; u < PER_RACK; u++) {
+        const n = (r - 1) * PER_RACK + u + 1;
+        const unit = el("div", "unit");
+        if (n > NODES) { unit.classList.add("empty"); rack.append(unit); continue; }
+        unit.innerHTML = "<span>" + id(n).slice(5) + "</span>";
+        unit.append(el("i", "led"));
+        unit.title = id(n);
+        units[id(n)] = unit;
+        rack.append(unit);
+      }
+      document.getElementById(r <= P1_RACKS ? "racks-p1" : "racks-p2").append(rack);
+    }
+    paint();
+  }
+  function el(tag, cls) { const e = document.createElement(tag); e.className = cls; return e; }
+  function paint() { for (const k in units) units[k].dataset.s = state[k]; }
+
+  const capT = document.getElementById("cap-t"), capD = document.getElementById("cap-d");
+  const steps = [
+    { t: "12:29:08", d: "node-041's agent reports XID 79 on GPU 3 while acme's job runs on it.", f: () => units["node-041"].classList.add("hot") },
+    { t: "12:30:36", d: "GPUFatalXid fires; Alertmanager calls the webhook; node-041 is quarantined with its tenant data still on disk.", f: () => { state["node-041"] = "quarantined"; } },
+    { t: "12:30:38", d: "The reconciler swaps in node-043 from the same pod and provisions it for acme.", f: () => { state["node-043"] = "provisioning"; units["node-043"].classList.add("new"); } },
+    { t: "+8 s", d: "node-043 is serving acme. The reservation keeps its size; it is marked degraded because it lost a node mid-run.", f: () => { state["node-043"] = "active"; } },
+    { t: "release", d: "acme's reservation ends. Every node goes to wiping. One of them, node-036, carries a kernel implant planted during the rental.", f: () => { ["node-033","node-034","node-035","node-036","node-037","node-038","node-039","node-040","node-042","node-043","node-049","node-050"].forEach(n => state[n] = "wiping"); units["node-043"].classList.remove("new"); } },
+    { t: "inspect", d: "Wipes succeed. Re-inspection attests each node: eleven pass, node-036's kernel digest is not in the reference values.", f: () => { ["node-033","node-034","node-035","node-036","node-037","node-038","node-039","node-040","node-042","node-043","node-049","node-050"].forEach(n => state[n] = "inspecting"); } },
+    { t: "verify", d: "attestation_failed: node-036 is quarantined before any other tenant can get it. The rest return to the pool.", f: () => { ["node-033","node-034","node-035","node-037","node-038","node-039","node-040","node-042","node-043","node-049","node-050"].forEach(n => state[n] = "available"); state["node-036"] = "quarantined"; units["node-036"].classList.add("hot"); } },
+  ];
+  const initial = JSON.parse(JSON.stringify(state));
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let timer = null;
+  function reset() {
+    Object.assign(state, JSON.parse(JSON.stringify(initial)));
+    for (const k in units) units[k].classList.remove("hot", "new");
+    paint();
+  }
+  function play() {
+    clearTimeout(timer); reset();
+    let i = 0;
+    const next = () => {
+      if (i >= steps.length) return;
+      const s = steps[i++];
+      s.f(); paint(); capT.textContent = s.t; capD.textContent = s.d;
+      timer = setTimeout(next, reduce ? 0 : 2600);
+    };
+    next();
+  }
+  document.getElementById("play").addEventListener("click", play);
+  build();
+
+  document.querySelectorAll(".copy").forEach(btn => btn.addEventListener("click", async () => {
+    const pre = document.getElementById(btn.dataset.for);
+    try { await navigator.clipboard.writeText(pre.textContent); btn.textContent = "Copied"; }
+    catch (e) {
+      const r = document.createRange(); r.selectNodeContents(pre);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      btn.textContent = "Selected";
+    }
+    setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+  }));
+})();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  (function () {
+    const dark = document.documentElement.dataset.theme === "dark" ||
+      (!document.documentElement.dataset.theme && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral", securityLevel: "strict" });
+  })();
+</script>
+
+</body>
+</html>
