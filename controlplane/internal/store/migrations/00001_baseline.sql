@@ -10,6 +10,9 @@ CREATE TABLE nodes (
     lease_owner      text,
     lease_expires_at timestamptz,
     updated_at       timestamptz NOT NULL DEFAULT now(),
+    -- Claims since the last applied transition. A node whose workers keep
+    -- dying mid-task sorts behind nodes that are making progress.
+    claim_attempts   integer NOT NULL DEFAULT 0 CHECK (claim_attempts >= 0),
     -- Defense in depth for node.Apply: a node being provisioned or in use
     -- always has an owner.
     CHECK (state NOT IN ('provisioning', 'active') OR tenant IS NOT NULL),
@@ -18,8 +21,9 @@ CREATE TABLE nodes (
 
 CREATE INDEX nodes_state_idx ON nodes (state);
 
--- Serves ClaimWork: the states that need a worker, oldest first.
-CREATE INDEX nodes_claimable_idx ON nodes (updated_at)
+-- Serves ClaimWork: the states that need a worker, least-retried then
+-- oldest first.
+CREATE INDEX nodes_claimable_idx ON nodes (claim_attempts, updated_at, id)
     WHERE state IN ('racked', 'inspecting', 'provisioning', 'wiping');
 
 CREATE TABLE node_events (

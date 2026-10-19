@@ -21,18 +21,21 @@ const claimableStates = `('racked', 'inspecting', 'provisioning', 'wiping')`
 var errBadLease = errors.New("invalid lease request")
 
 // ClaimWork leases one node that needs a worker (state racked, inspecting,
-// provisioning or wiping) whose lease is free or expired. Oldest updated_at first.
+// provisioning or wiping) whose lease is free or expired. Nodes claimed the
+// fewest times since their last transition go first, then oldest updated_at,
+// so a node that keeps killing its workers cannot starve the others.
 func (p *Postgres) ClaimWork(ctx context.Context, owner string, ttl time.Duration) (node.Node, error) {
 	if owner == "" || ttl <= 0 {
 		return node.Node{}, fmt.Errorf("%w: need an owner and a positive ttl", errBadLease)
 	}
 	rows, err := p.pool.Query(ctx,
-		`UPDATE nodes SET lease_owner = $1, lease_expires_at = now() + make_interval(secs => $2)
+		`UPDATE nodes SET lease_owner = $1, lease_expires_at = now() + make_interval(secs => $2),
+		     claim_attempts = claim_attempts + 1
 		 WHERE id = (
 		     SELECT id FROM nodes
 		     WHERE state IN `+claimableStates+`
 		       AND (lease_expires_at IS NULL OR lease_expires_at <= now())
-		     ORDER BY updated_at, id
+		     ORDER BY claim_attempts, updated_at, id
 		     LIMIT 1
 		     FOR UPDATE SKIP LOCKED)
 		 RETURNING `+nodeColumns,

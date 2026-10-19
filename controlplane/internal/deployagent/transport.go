@@ -79,7 +79,7 @@ func statusError(method, path string, code int) error {
 		return fmt.Errorf("%w: %s %s: status %d", ErrUnauthorized, method, path, code)
 	case http.StatusNotFound:
 		return fmt.Errorf("%w: %s %s: status %d", ErrNotFound, method, path, code)
-	case http.StatusServiceUnavailable:
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return fmt.Errorf("%w: %s %s: status %d", ErrTransient, method, path, code)
 	}
 	return fmt.Errorf("%s %s: status %d", method, path, code)

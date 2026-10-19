@@ -15,6 +15,7 @@ All endpoints require HTTP basic auth. Errors:
 | 400 | malformed body or unknown enum value | plain error |
 | 401 | bad credentials | `ErrUnauthorized` |
 | 404 | unknown system | `ErrNotFound` |
+| 502, 504 | proxy in front of the BMC could not reach it (retry) | `ErrTransient` |
 | 503 | BMC busy or flaky (retry) | `ErrTransient` |
 
 Network errors and timeouts are also `ErrTransient`.

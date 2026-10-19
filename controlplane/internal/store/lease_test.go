@@ -192,6 +192,103 @@ func TestExpiredLeaseIsReclaimable(t *testing.T) {
 	}
 }
 
+func claimAttemptsOf(t *testing.T, p *Postgres, id string) int {
+	t.Helper()
+	var n int
+	err := p.pool.QueryRow(context.Background(),
+		`SELECT claim_attempts FROM nodes WHERE id = $1`, id).Scan(&n)
+	if err != nil {
+		t.Fatalf("read claim attempts of %s: %v", id, err)
+	}
+	return n
+}
+
+// A worker that keeps dying on the oldest node must not starve the rest.
+func TestClaimWorkDefersNodeWhoseWorkerDied(t *testing.T) {
+	p := openTestStore(t)
+	registerIn(t, p, "poison", node.StateRacked)
+	registerIn(t, p, "healthy", node.StateRacked)
+	mustClaim(t, p, "w1", shortTTL)
+	waitExpired(t, p, "poison")
+
+	if got := mustClaim(t, p, "w2", longTTL); got.ID != "healthy" {
+		t.Fatalf("claimed %s, want healthy ahead of the expired poison node", got.ID)
+	}
+	if got := mustClaim(t, p, "w3", longTTL); got.ID != "poison" {
+		t.Fatalf("claimed %s, want poison once nothing else waits", got.ID)
+	}
+}
+
+func TestClaimWorkDefersNodeReleasedWithoutProgress(t *testing.T) {
+	p := openTestStore(t)
+	registerIn(t, p, "a", node.StateRacked)
+	registerIn(t, p, "b", node.StateRacked)
+	mustClaim(t, p, "w1", longTTL)
+	if err := p.ReleaseLease(context.Background(), "a", "w1"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	if got := mustClaim(t, p, "w2", longTTL); got.ID != "b" {
+		t.Fatalf("claimed %s, want b ahead of a", got.ID)
+	}
+}
+
+func TestClaimWorkCountsAttempts(t *testing.T) {
+	p := openTestStore(t)
+	registerIn(t, p, "n1", node.StateRacked)
+	for want := 1; want <= 3; want++ {
+		mustClaim(t, p, "w1", shortTTL)
+		waitExpired(t, p, "n1")
+		if got := claimAttemptsOf(t, p, "n1"); got != want {
+			t.Fatalf("claim attempts = %d, want %d", got, want)
+		}
+	}
+}
+
+func TestTransitionResetsClaimAttempts(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name  string
+		apply func(p *Postgres) (node.Node, error)
+	}{
+		{"worker", func(p *Postgres) (node.Node, error) {
+			return p.ApplyEventAsOwner(ctx, "n1", "w2", node.EventStartInspection, "")
+		}},
+		{"operator", func(p *Postgres) (node.Node, error) {
+			return p.ApplyEvent(ctx, "n1", node.EventStartInspection, "")
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := openTestStore(t)
+			registerIn(t, p, "n1", node.StateRacked)
+			mustClaim(t, p, "w1", shortTTL)
+			waitExpired(t, p, "n1")
+			mustClaim(t, p, "w2", longTTL)
+
+			if _, err := tt.apply(p); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if got := claimAttemptsOf(t, p, "n1"); got != 0 {
+				t.Fatalf("claim attempts = %d after a transition, want 0", got)
+			}
+		})
+	}
+}
+
+func TestRejectedTransitionKeepsClaimAttempts(t *testing.T) {
+	p := openTestStore(t)
+	registerIn(t, p, "n1", node.StateRacked)
+	mustClaim(t, p, "w1", longTTL)
+
+	_, err := p.ApplyEventAsOwner(context.Background(), "n1", "w1", node.EventRelease, "")
+	if !errors.Is(err, node.ErrInvalidTransition) {
+		t.Fatalf("err = %v, want ErrInvalidTransition", err)
+	}
+	if got := claimAttemptsOf(t, p, "n1"); got != 1 {
+		t.Fatalf("claim attempts = %d, want 1", got)
+	}
+}
+
 func TestRenewLeaseByHolderExtends(t *testing.T) {
 	p := openTestStore(t)
 	registerIn(t, p, "n1", node.StateRacked)

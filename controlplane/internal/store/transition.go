@@ -79,7 +79,8 @@ func (p *Postgres) transition(ctx context.Context, id string, ev node.Event, ten
 
 func recordTransition(ctx context.Context, tx pgx.Tx, cur, next node.Node, ev node.Event) error {
 	if _, err := tx.Exec(ctx,
-		`UPDATE nodes SET state = $2, tenant = nullif($3, ''), updated_at = now() WHERE id = $1`,
+		`UPDATE nodes SET state = $2, tenant = nullif($3, ''), updated_at = now(), claim_attempts = 0
+		 WHERE id = $1`,
 		cur.ID, string(next.State), next.Tenant); err != nil {
 		return fmt.Errorf("update node %s: %w", cur.ID, err)
 	}

@@ -36,6 +36,6 @@ type System struct {
 var (
 	ErrNotFound     = errors.New("redfish: system not found")
 	ErrUnauthorized = errors.New("redfish: unauthorized")
-	// ErrTransient marks failures worth retrying: 503s, timeouts, network errors.
+	// ErrTransient marks failures worth retrying: 502, 503 and 504, timeouts, network errors.
 	ErrTransient = errors.New("redfish: transient failure")
 )

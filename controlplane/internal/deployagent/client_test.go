@@ -326,12 +326,13 @@ func TestStatusErrorMapping(t *testing.T) {
 	}{
 		{http.StatusUnauthorized, ErrUnauthorized},
 		{http.StatusNotFound, ErrNotFound},
+		{http.StatusBadGateway, ErrTransient},
 		{http.StatusServiceUnavailable, ErrTransient},
+		{http.StatusGatewayTimeout, ErrTransient},
 		{http.StatusBadRequest, nil},
 		{http.StatusForbidden, nil},
 		{http.StatusInternalServerError, nil},
-		{http.StatusBadGateway, nil},
-		{http.StatusGatewayTimeout, nil},
+		{http.StatusNotImplemented, nil},
 		{http.StatusMovedPermanently, nil},
 	}
 	for _, tc := range cases {
