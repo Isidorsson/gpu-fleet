@@ -6,28 +6,31 @@ A control plane for bare-metal GPU clouds: node lifecycle, topology-aware
 capacity reservations, tenant attestation and automated remediation. It runs on
 a laptop against a simulated fleet.
 
-**[Project page](https://isidorsson.github.io/gpu-fleet/)** · [Live dashboard](https://grafana-production-6e71.up.railway.app) · [Live API](https://controlplane-production-6f4e.up.railway.app/v1/capacity)
+**[Project page](https://isidorsson.github.io/gpu-fleet/)** · [Fleet replay](https://isidorsson.github.io/gpu-fleet/#fleet-replay) · [Run it yourself](#run-it-yourself)
 
-## Live demo
+## Demo
 
-A read-only deployment on Railway, kept busy around the clock by a chaos
-service: nodes get implants and GPU faults, the platform catches them,
-quarantines the nodes, replaces them for tenants and repairs them.
+A chaos service keeps the simulated fleet busy: nodes get implants and GPU
+faults, the platform catches them, quarantines the nodes, replaces them for
+tenants and repairs them.
 
 - Project page with a walkthrough of the recorded incidents: https://isidorsson.github.io/gpu-fleet/
-- Grafana dashboard (anonymous viewer): https://grafana-production-6e71.up.railway.app
-- Control plane API (GET only): https://controlplane-production-6f4e.up.railway.app
+- Fleet replay, the same chaos rules running in the browser on simulated data,
+  with the dashboard panels and a read-only API console: https://isidorsson.github.io/gpu-fleet/#fleet-replay
+- The real thing, with Grafana and the full API: [run it yourself](#run-it-yourself) with one Docker Compose command
+
+Once it is running locally:
 
 ```bash
-curl -s https://controlplane-production-6f4e.up.railway.app/v1/capacity                    # free nodes per pod
-curl -s https://controlplane-production-6f4e.up.railway.app/v1/remediations                # automatic quarantines and their outcomes
-curl -s https://controlplane-production-6f4e.up.railway.app/v1/attestation/keys            # public key that signs attestation results
-curl -s https://controlplane-production-6f4e.up.railway.app/v1/nodes/node-001/attestation  # latest signed result, verifiable offline
+curl -s http://localhost:8080/v1/capacity                    # free nodes per pod
+curl -s http://localhost:8080/v1/remediations                # automatic quarantines and their outcomes
+curl -s http://localhost:8080/v1/attestation/keys            # public key that signs attestation results
+curl -s http://localhost:8080/v1/nodes/node-001/attestation  # latest signed result, verifiable offline
 ```
 
 On Windows PowerShell, `curl` is an alias for `Invoke-WebRequest`: use `curl.exe` instead, or open the URLs in a browser.
 
-How it is deployed: [deploy/railway/README.md](deploy/railway/README.md).
+It can also be hosted as a read-only showcase: [deploy/railway/README.md](deploy/railway/README.md).
 
 ## What it does
 
