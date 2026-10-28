@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="gpu-fleet: a bare-metal GPU cloud control plane with topology-aware reservations, tenant attestation and automated remediation. Live demo and source.">
+<meta name="description" content="gpu-fleet: a bare-metal GPU cloud control plane with topology-aware reservations, tenant attestation and automated remediation. Simulated fleet replay and source.">
 <title>gpu-fleet</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -143,6 +143,42 @@ section > header { display: grid; gap: 8px; }
 .stack { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { font-family: var(--mono); font-size: 0.8rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); }
 
+/* Fleet replay */
+.replay { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 20px; min-width: 0; }
+.replay .floor-head .mono { font-variant-numeric: tabular-nums; }
+.replay .controls button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-ink); }
+.replay .unit { border: 0; width: 100%; cursor: pointer; font: inherit; font-family: var(--mono); font-size: 0.62rem; color: #c7d0da; }
+.replay .unit:hover { box-shadow: 0 0 0 1px var(--accent); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; }
+.stat .value { font-family: var(--display); font-weight: 800; font-size: 2rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.stat .value.bad { color: var(--bad); }
+.stat .value.warn { color: var(--warn); }
+.stat .value.ok { color: var(--ok); }
+.panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 720px) { .panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.panel { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel.wide { grid-column: 1 / -1; }
+.panel svg { width: 100%; height: 160px; display: block; }
+.area.available { fill: var(--ok); } .area.inspecting { fill: color-mix(in srgb, var(--busy) 55%, var(--panel)); }
+.area.provisioning { fill: var(--busy); } .area.active { fill: var(--accent); }
+.area.wiping { fill: var(--warn); } .area.quarantined { fill: var(--bad); }
+.bar-row { display: grid; grid-template-columns: 2.5em 1fr 4em; gap: 10px; align-items: center; font-size: 0.85rem; }
+.bar { height: 12px; border-radius: 3px; background: var(--code-bg); border: 1px solid var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok); transition: width 0.3s ease; }
+.panel table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 0.78rem; }
+.panel td { padding: 4px 10px 4px 0; border-top: 1px dashed var(--line); vertical-align: top; white-space: nowrap; }
+[data-log] td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; }
+[data-log] td:last-child { padding-right: 0; }
+.panel td:first-child { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.panel td.empty { color: var(--muted); }
+.console form { display: flex; gap: 8px; flex-wrap: wrap; }
+.console input { flex: 1 1 260px; min-width: 0; font-family: var(--mono); font-size: 0.85rem; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--code-bg); color: var(--ink); }
+.console button, .preset { font: inherit; font-size: 0.8rem; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.preset { font-family: var(--mono); font-size: 0.75rem; }
+.console pre { margin: 0; max-height: 320px; overflow: auto; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; font-family: var(--mono); font-size: 0.78rem; line-height: 1.5; }
+
 footer { border-top: 1px solid var(--line); padding-top: 20px; display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; color: var(--muted); font-size: 0.9rem; }
 
 @media (prefers-reduced-motion: reduce) { .unit { transition: none; } }
@@ -157,10 +193,10 @@ img { max-width: 100%; }
   <section class="hero" aria-labelledby="title">
     <div class="label">Bare-metal GPU cloud control plane · Go + Rust</div>
     <h1 id="title">gpu-fleet</h1>
-    <p class="pitch">Software that turns racks of GPU servers into something tenants can reserve: it provisions nodes over Redfish, places reservations by fabric topology, proves to each tenant that the previous one left nothing behind, and pulls failing GPUs out of service on its own. A simulated fleet makes all of it run on a laptop or on the live demo below.</p>
+    <p class="pitch">Software that turns racks of GPU servers into something tenants can reserve: it provisions nodes over Redfish, places reservations by fabric topology, proves to each tenant that the previous one left nothing behind, and pulls failing GPUs out of service on its own. A simulated fleet makes all of it run on a laptop, and the fleet replay below runs the same chaos rules in your browser.</p>
     <div class="links">
-      <a class="btn primary" href="https://grafana-production-6e71.up.railway.app" target="_blank" rel="noopener">Live dashboard</a>
-      <a class="btn" href="https://controlplane-production-6f4e.up.railway.app/v1/capacity" target="_blank" rel="noopener">Live API</a>
+      <a class="btn primary" href="#fleet-replay">Fleet replay</a>
+      <a class="btn" href="#try">Run it yourself</a>
       <a class="btn" href="https://github.com/Isidorsson/gpu-fleet" target="_blank" rel="noopener">Source on GitHub</a>
     </div>
 
@@ -183,9 +219,67 @@ img { max-width: 100%; }
     </div>
   </section>
 
+  <section id="fleet-replay" aria-labelledby="replay-title">
+    <header>
+      <div class="label">Simulated replay · seeded · runs in your browser</div>
+      <h2 id="replay-title">Fleet replay</h2>
+      <p>The chaos service's rules from <code>controlplane/internal/chaos</code>, replayed against a model of the control plane: reservations, GPU faults, implants, quarantines and repairs. The numbers are simulated; the rules, states and API shapes are the real ones. Click a node to see its events.</p>
+    </header>
+    <div class="replay">
+      <div class="floor-head">
+        <div class="label">sim time <span class="mono" data-clock>12:00:00</span> · ·a = node with a GPU agent</div>
+        <div class="controls">
+          <button type="button" data-play>Pause</button>
+          <button type="button" data-speed="10x" aria-pressed="false">10x</button>
+          <button type="button" data-speed="30x" aria-pressed="true">30x</button>
+          <button type="button" data-speed="90x" aria-pressed="false">90x</button>
+          <button type="button" data-restart>Restart</button>
+        </div>
+      </div>
+      <div class="pods" data-floor aria-label="Rack elevation of the simulated fleet"></div>
+      <div class="legend">
+        <span><i class="led" style="background:var(--ok)"></i>available</span>
+        <span><i class="led" style="background:var(--accent)"></i>tenant workload</span>
+        <span><i class="led" style="background:var(--busy)"></i>inspecting / provisioning</span>
+        <span><i class="led" style="background:var(--warn)"></i>wiping</span>
+        <span><i class="led" style="background:var(--bad)"></i>quarantined</span>
+      </div>
+      <div class="stats" data-stats aria-live="off"></div>
+      <div class="panels">
+        <div class="panel wide">
+          <div class="label">Nodes by state · last 30 min</div>
+          <svg data-area viewBox="0 0 600 160" preserveAspectRatio="none" role="img" aria-label="Stacked area of node states over time"></svg>
+        </div>
+        <div class="panel">
+          <div class="label">Free nodes by pod</div>
+          <div data-free></div>
+          <div class="label">Latest XIDs</div>
+          <table><tbody data-xids></tbody></table>
+        </div>
+        <div class="panel">
+          <div class="label">Remediations</div>
+          <table><tbody data-remediations></tbody></table>
+        </div>
+        <div class="panel wide">
+          <div class="label">Chaos log</div>
+          <table><tbody data-log></tbody></table>
+        </div>
+        <div class="panel wide console">
+          <div class="label">Read-only API · answered by the simulation in the control plane's response shapes</div>
+          <form data-console>
+            <input data-request aria-label="Request" value="GET /v1/capacity" spellcheck="false" autocomplete="off">
+            <button type="submit">Send</button>
+          </form>
+          <div class="presets" data-presets></div>
+          <pre data-response aria-live="polite"></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section aria-labelledby="incidents">
     <header>
-      <div class="label">Recorded from live runs</div>
+      <div class="label">Recorded from real runs</div>
       <h2 id="incidents">Two incidents, no operator</h2>
     </header>
     <div class="incidents">
@@ -223,7 +317,7 @@ img { max-width: 100%; }
       <div class="decision"><h3>No double booking, by constraint</h3><p>An exclusion constraint on <code>(node_id, period)</code> rejects overlapping reservations in the database itself; losing a placement race becomes a retry, not a bug.</p></div>
       <div class="decision"><h3>Attestation that fails closed</h3><p>The verifier checks every source of evidence and reports every failure. A policy file that omits the confidential-computing requirement is rejected, not read as "off".</p></div>
       <div class="decision"><h3>Remediation with a blast radius</h3><p>Automatic quarantines are capped at 5 per 10 minutes, counted in the audit table under an advisory lock, so the cap holds across replicas and one noisy rule cannot empty the fleet.</p></div>
-      <div class="decision"><h3>Read-only public demo, by construction</h3><p>The control plane serves the full API on a private listener and a GET-only copy on the public one. The public side has no route to a write path at all.</p></div>
+      <div class="decision"><h3>Read-only public listener, by construction</h3><p>The control plane serves the full API on a private listener and a GET-only copy on the public one. The public side has no route to a write path at all.</p></div>
     </div>
   </section>
 
@@ -250,27 +344,27 @@ flowchart TB
   <section aria-labelledby="try">
     <header>
       <div class="label">Try it</div>
-      <h2 id="try">Poke the live system</h2>
-      <p>The public API is read-only. Every attestation result is signed, so you can check it against the published key without trusting the API.</p>
+      <h2 id="try">Run the real system</h2>
+      <p>One command starts the control plane, the 50-node simulated fleet, chaos and Grafana on <span class="mono">localhost:3000</span>. Every attestation result is signed, so you can check it against the published key without trusting the API.</p>
     </header>
     <div class="try">
-      <div class="cmd">
-        <div class="label">Free capacity per pod</div>
-        <div class="code"><pre id="c1">curl -s https://controlplane-production-6f4e.up.railway.app/v1/capacity</pre><button class="copy" type="button" data-for="c1">Copy</button></div>
-      </div>
-      <div class="cmd">
-        <div class="label">Automatic quarantines</div>
-        <div class="code"><pre id="c2">curl -s https://controlplane-production-6f4e.up.railway.app/v1/remediations</pre><button class="copy" type="button" data-for="c2">Copy</button></div>
-      </div>
-      <div class="cmd">
-        <div class="label">A node's signed attestation result</div>
-        <div class="code"><pre id="c3">curl -s https://controlplane-production-6f4e.up.railway.app/v1/nodes/node-001/attestation</pre><button class="copy" type="button" data-for="c3">Copy</button></div>
-      </div>
       <div class="cmd">
         <div class="label">Run everything locally</div>
         <div class="code"><pre id="c4">git clone https://github.com/Isidorsson/gpu-fleet
 cd gpu-fleet
 docker compose -f deploy/compose.yaml --profile demo up -d --build</pre><button class="copy" type="button" data-for="c4">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="label">Free capacity per pod</div>
+        <div class="code"><pre id="c1">curl -s http://localhost:8080/v1/capacity</pre><button class="copy" type="button" data-for="c1">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="label">Automatic quarantines</div>
+        <div class="code"><pre id="c2">curl -s http://localhost:8080/v1/remediations</pre><button class="copy" type="button" data-for="c2">Copy</button></div>
+      </div>
+      <div class="cmd">
+        <div class="label">A node's signed attestation result</div>
+        <div class="code"><pre id="c3">curl -s http://localhost:8080/v1/nodes/node-001/attestation</pre><button class="copy" type="button" data-for="c3">Copy</button></div>
       </div>
     </div>
     <div class="stack" aria-label="Technology">
@@ -375,6 +469,7 @@ docker compose -f deploy/compose.yaml --profile demo up -d --build</pre><button 
 })();
 </script>
 
+<script type="module" src="replay/main.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
 <script>
   (function () {
